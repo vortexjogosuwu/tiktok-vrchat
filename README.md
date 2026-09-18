@@ -80,8 +80,24 @@ Abre uma janela com:
 - **Campos no topo**: canal do TikTok, host/porta OSC do VRChat, botões
   "Conectar na LIVE" / "Desconectar", e um indicador de status
   (Desconectado / Conectando / Conectado).
-- **Lista de presentes**: mostra todo presente configurado, com o
-  endereço OSC, tipo e valor de cada alvo.
+- **Ações rápidas** (sempre visíveis, qualquer que seja a aba aberta):
+  - **Voltar para roupa padrão**: troca pra roupa padrão imediatamente,
+    sem mexer em nada que esteja na fila. Útil pra "resetar" o avatar
+    manualmente a qualquer momento.
+  - **🚨 PÂNICO**: pede confirmação e, se você confirmar, cancela **tudo**
+    que estiver ativo ou esperando na fila de presentes com duração (sem
+    deixar nenhum deles rodar o próprio revert) e troca pra roupa padrão
+    na hora. Serve como um botão de emergência caso algo saia do
+    controle durante uma LIVE.
+  - **Parâmetros do avatar...** e **Salvar configuração** (essa última
+    grava tudo de volta no `config.yaml` — ⚠️ isso reescreve o arquivo
+    inteiro, comentários do YAML original são perdidos nesse processo,
+    mas os valores continuam intactos. Se você já estiver conectado à
+    LIVE quando salvar, a conexão atual continua usando a configuração
+    antiga até desconectar e conectar de novo — os botões de teste já
+    usam a versão nova na hora, sem precisar reconectar).
+- **Aba "Presentes"**: a lista de presentes configurados (endereço,
+  tipo, valor, duração de cada alvo).
   - **Novo presente** / **Editar presente** / **Remover presente**.
   - **Testar selecionado(s)**: dispara o(s) comando(s) OSC da linha
     selecionada **na hora**, sem duração nem revert — ideal pra
@@ -89,37 +105,35 @@ Abre uma janela com:
   - **Testar presente (completo)**: roda o presente **inteiro**, exatamente
     como aconteceria numa LIVE de verdade — aplica os alvos, espera a
     duração (se o presente tiver uma) e reverte automaticamente ao
-    final. Funciona **com ou sem estar conectado ao TikTok** — não
-    precisa abrir uma LIVE pra testar se a fila e o revert estão
-    funcionando.
-  - **Voltar para roupa padrão**: troca pra roupa padrão (`vrchat.default_revert`/
-    `default_revert_outfit`) imediatamente, sem mexer em nada que esteja
-    na fila. Útil pra "resetar" o avatar manualmente a qualquer momento.
-  - **🚨 PÂNICO**: pede confirmação e, se você confirmar, cancela **tudo**
-    que estiver ativo ou esperando na fila de presentes com duração (sem
-    deixar nenhum deles rodar o próprio revert) e troca pra roupa padrão
-    na hora. Serve como um botão de emergência caso algo saia do
-    controle durante uma LIVE.
+    final. Funciona **com ou sem estar conectado ao TikTok**.
   - Ao criar ou editar um presente, cada alvo também tem seu próprio
     botão **"Testar"** dentro do formulário, então dá pra validar
     se o parâmetro está certo *antes mesmo* de salvar.
-  - **Salvar configuração** grava tudo de volta no `config.yaml`
-    (⚠️ isso reescreve o arquivo inteiro — comentários do YAML original
-    são perdidos nesse processo; os valores continuam intactos). Se você
-    já estiver conectado à LIVE quando salvar, a conexão atual continua
-    usando a configuração antiga até você desconectar e conectar de novo
-    — mas o botão "Testar presente" já usa a versão nova na hora.
+- **Aba "Conjuntos de roupa"**: a lista de conjuntos (`outfits:`), com
+  uma coluna **"Padrão?"** marcando com ★ qual é a roupa padrão atual.
+  - **Novo conjunto** / **Editar conjunto** / **Remover conjunto**
+    (remover avisa se o conjunto é a roupa padrão ou é usado por algum
+    presente, mas não impede).
+  - **Testar conjunto (completo)**: aplica todas as peças do conjunto
+    selecionado agora, em sequência.
+  - **★ Definir como roupa padrão**: torna o conjunto selecionado a
+    roupa padrão global na hora — sem precisar editar o YAML nem abrir
+    outra janela.
+  - Renomear um conjunto (editando o nome no formulário) atualiza
+    sozinho qualquer presente ou a roupa padrão global que já apontava
+    pro nome antigo.
 - **Log**: mesma informação que apareceria no console (`[TIKTOK]`,
-  `[OSC]`, `[ERROR]`), só que dentro da janela.
+  `[OSC]`, `[ERROR]`), sempre visível embaixo das abas.
 
-Fluxo recomendado para configurar um presente novo: clique em
-**Novo presente** → preencha nome, parâmetro/endereço, tipo e valor
-(use "Escolher da lista..." e "Parâmetros do avatar..." pra não
-precisar adivinhar nomes) → clique em **Testar** no alvo pra conferir
-no VRChat → salve o presente → selecione ele na lista principal e
-clique em **Testar presente (completo)** pra conferir o ciclo inteiro
-(inclusive duração/revert, se configurados) — tudo isso sem precisar
-estar numa LIVE. Só depois de conferir que está tudo certo, clique em
+Fluxo recomendado: primeiro monte seus **conjuntos de roupa** (aba
+"Conjuntos de roupa" → "Novo conjunto" → adicione as peças com
+"Parâmetros do avatar..." pra não adivinhar nomes → teste cada peça →
+defina um deles como padrão com "★ Definir como roupa padrão"). Depois
+vá pra aba **"Presentes"** → "Novo presente" → escolha um conjunto
+pronto e/ou alvos extras → salve → selecione o presente e clique em
+**Testar presente (completo)** pra conferir o ciclo inteiro (inclusive
+duração/revert) — tudo isso sem precisar estar numa LIVE. Só depois de
+conferir que está tudo certo, clique em
 **Salvar configuração**.
 
 ## Uso — Linha de comando (opcional, para quem preferir)
@@ -386,14 +400,21 @@ Como funciona:
    OSC → Enabled) pelo menos uma vez. Isso faz o VRChat gerar um
    arquivo em:
    `%USERPROFILE%\AppData\LocalLow\VRChat\VRChat\OSC\{seu user id}\Avatars\{avatar id}.json`
-2. Clique em **"Parâmetros do avatar..."** na GUI. Ela lê esse arquivo
-   e mostra uma tabela com **todos** os parâmetros: nome, endereço OSC,
-   tipo, e se dá pra "setar" ele de fora (alguns parâmetros são só de
-   leitura — ex: velocidade — e não servem pra trocar roupa).
-3. Selecione uma linha e use **"Copiar nome"** / **"Copiar endereço"**
-   para colar depois num alvo, ou **"Usar este parâmetro..."** para
-   abrir um alvo já pré-preenchido, pronto pra você só definir o valor
-   e testar.
+2. Clique em **"Parâmetros do avatar..."** (sempre visível, fora das
+   abas) ou, direto de dentro do formulário de um alvo, no botão
+   **"Escolher da lista do avatar..."** ao lado do campo de nome. Ela
+   lê esse arquivo e mostra uma tabela com **todos** os parâmetros:
+   nome, endereço OSC, tipo, e se dá pra "setar" ele de fora (alguns
+   parâmetros são só de leitura — ex: velocidade — e não servem pra
+   trocar roupa).
+3. Tem um campo **"Filtrar"** no topo da tabela — útil se o avatar tem
+   muitos parâmetros: digite parte do nome ou do endereço e a lista
+   filtra na hora (mostra "N de M" pra você saber quantos bateram).
+4. Selecione uma linha (ou dê duplo-clique) e use **"Copiar nome"** /
+   **"Copiar endereço"** para colar depois num alvo, ou
+   **"Usar este parâmetro..."** — se você abriu esta tela a partir de
+   um formulário de alvo, isso preenche o nome e o tipo **direto
+   naquele formulário**, sem precisar copiar/colar nada.
 
 > Essa leitura só funciona no Windows (onde o VRChat roda) e só depois
 > que o avatar foi carregado pelo menos uma vez com OSC habilitado. Se
@@ -416,8 +437,8 @@ errado, o log aponta a causa:
 
 - **`[TIKTOK] ... é um presente com duração — enviando para a fila.
   Revert (NENHUM configurado): (vazio)`** → o presente não tem revert
-  próprio nem roupa padrão global. Configure um dos dois (aba do
-  presente ou botão "Roupa padrão (revert global)").
+  próprio nem roupa padrão global. Configure um dos dois (dentro do
+  presente, ou na aba "Conjuntos de roupa" com "★ Definir como roupa padrão").
 - **`[ERROR] Tempo de 'X' esgotado, mas NÃO havia nenhum alvo de revert
   configurado`** → mesma causa acima, mas avisado no momento em que o
   tempo realmente acabou.

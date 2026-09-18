@@ -77,6 +77,9 @@ class TargetEditDialog(tk.Toplevel):
         ttk.Entry(frm, textvariable=self.name_var, width=32).grid(
             row=2, column=1, sticky="we", **pad
         )
+        ttk.Button(
+            frm, text="Escolher da lista do avatar...", command=self._open_avatar_parameters
+        ).grid(row=2, column=2, sticky="w", padx=(4, 10))
 
         ttk.Label(frm, text="Tipo:").grid(row=3, column=0, sticky="w", **pad)
         type_combo = ttk.Combobox(
@@ -125,6 +128,9 @@ class TargetEditDialog(tk.Toplevel):
         self.name_var.set(name)
         self.type_var.set(osc_type)
         self._update_labels()
+
+    def _open_avatar_parameters(self):
+        AvatarParametersDialog(self, on_use_parameter=self.set_parameter)
 
     def _build_raw(self):
         name = self.name_var.get().strip()
@@ -856,13 +862,14 @@ class AvatarParametersDialog(tk.Toplevel):
     def __init__(self, parent, on_use_parameter=None):
         super().__init__(parent)
         self.title("Parâmetros do avatar (lidos do VRChat)")
-        self.geometry("680x460")
+        self.geometry("680x480")
         self.transient(parent)
         self.grab_set()
 
         self.on_use_parameter = on_use_parameter
         self.avatars = []
         self.current_params = []
+        self._visible_params = []
 
         frm = ttk.Frame(self, padding=10)
         frm.pack(fill="both", expand=True)
@@ -884,6 +891,20 @@ class AvatarParametersDialog(tk.Toplevel):
         self.info_label = ttk.Label(frm, text="", foreground="#666666", justify="left")
         self.info_label.pack(anchor="w", pady=(6, 6))
 
+        filter_frame = ttk.Frame(frm)
+        filter_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(filter_frame, text="Filtrar (nome ou endereço):").pack(side="left")
+        self.filter_var = tk.StringVar()
+        self.filter_var.trace_add("write", lambda *_a: self._refresh_tree())
+        filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_var)
+        filter_entry.pack(side="left", fill="x", expand=True, padx=(6, 6))
+        ttk.Button(filter_frame, text="Limpar", command=lambda: self.filter_var.set("")).pack(
+            side="left"
+        )
+        self.count_label = ttk.Label(filter_frame, text="", foreground="#666666")
+        self.count_label.pack(side="left", padx=(8, 0))
+        filter_entry.focus_set()
+
         columns = ("nome", "endereco", "tipo", "gravavel")
         self.tree = ttk.Treeview(frm, columns=columns, show="headings")
         self.tree.heading("nome", text="Nome do parâmetro")
@@ -895,6 +916,7 @@ class AvatarParametersDialog(tk.Toplevel):
         self.tree.column("tipo", width=60, anchor="center")
         self.tree.column("gravavel", width=90, anchor="center")
         self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<Double-1>", lambda _e: self._use_selected())
 
         scroll = ttk.Scrollbar(frm, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -1006,22 +1028,33 @@ class AvatarParametersDialog(tk.Toplevel):
     def _load_selected_avatar(self):
         label = self.avatar_var.get()
         avatar = next((a for a in self.avatars if a.label == label), None)
+        self.current_params = avatar.parameters if avatar is not None else []
+        self._refresh_tree()
+
+    def _refresh_tree(self):
+        term = self.filter_var.get().strip().lower()
         self.tree.delete(*self.tree.get_children())
-        if avatar is None:
-            self.current_params = []
-            return
-        self.current_params = avatar.parameters
-        for idx, p in enumerate(avatar.parameters):
+        self._visible_params = []
+        for p in self.current_params:
+            if term and term not in p.name.lower() and term not in p.address.lower():
+                continue
+            iid = str(len(self._visible_params))
+            self._visible_params.append(p)
             self.tree.insert(
-                "", "end", iid=str(idx),
+                "", "end", iid=iid,
                 values=(p.name, p.address, p.osc_type, "sim" if p.writable else "não"),
             )
+        total = len(self.current_params)
+        shown = len(self._visible_params)
+        self.count_label.configure(
+            text=f"{shown} de {total}" if term else f"{total} parâmetro(s)"
+        )
 
     def _selected_param(self):
         sel = self.tree.selection()
         if not sel:
             return None
-        return self.current_params[int(sel[0])]
+        return self._visible_params[int(sel[0])]
 
     def _copy_name(self):
         p = self._selected_param()
