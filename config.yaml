@@ -1,92 +1,25 @@
-# =============================================================
-# config.yaml
-# Configuração do TikTok -> VRChat OSC Bridge
-#
-# Edite este arquivo para adicionar/alterar presentes, endereços
-# OSC, tipos e valores, sem precisar mexer no código Python.
-#
-# Cada alvo (o que um presente dispara) tem 3 campos:
-#   - parameter (ou address): qual parâmetro/endereço OSC atingir
-#   - type: "int" | "float" | "bool" | "string"
-#   - value: o valor a enviar, já no formato do type escolhido
-#
-# O VRChat só reconhece parâmetros de avatar Int, Float ou Bool
-# (não existe "string" nativo no Animator). O tipo "string" existe
-# aqui para o caso de você querer rotear o mesmo bridge para outro
-# programa que aceite texto via OSC — para o VRChat, use sempre
-# int/float/bool.
-# =============================================================
-
 tiktok:
-  # Seu @ do TikTok (sem o @), usado para conectar na LIVE
-  username: "vortexjogosuwu"
-
+  username: vortexjogosuwu
 vrchat:
-  # Host e porta OSC do VRChat (padrão: 127.0.0.1:9000)
-  osc_host: "127.0.0.1"
+  osc_host: 127.0.0.1
   osc_port: 9000
-
+  default_revert_outfit: Padrao
 reconnect:
-  # Tempo (segundos) de espera antes da primeira tentativa de reconexão
   initial_delay: 5
-  # Tempo máximo (segundos) entre tentativas (backoff exponencial)
   max_delay: 60
-  # Multiplicador do backoff exponencial
   backoff_multiplier: 2
-
-# -------------------------------------------------------------
-# Mapeamento de presentes -> parâmetros/endereços OSC
-# -------------------------------------------------------------
-gifts:
-
-  # --- Exemplo com parâmetro Int (0, 1, 2, 3...) ---
-  Rose:
-    parameter: "Outfit"
+outfits:
+  Padrao:
+  - parameter: OUTFIT
     type: int
     value: 1
-
-  Heart:
-    parameter: "Outfit"
+gifts:
+  Rose:
     type: int
-    value: 2
-
-  Galaxy:
-    parameter: "Outfit"
-    type: int
-    value: 3
-
-  # --- Exemplo com parâmetro Bool (true/false) ---
-  # Ex: liga um efeito, um acessório, um toggle de partícula, etc.
-  Lion:
-    parameter: "GlowEffect"
-    type: bool
-    value: true
-
-  # --- Exemplo com parâmetro Float (ex: 0.0 a 1.0) ---
-  # Útil para blend shapes, blend trees, intensidade de efeito, etc.
-  Diamond:
-    parameter: "EffectIntensity"
-    type: float
-    value: 0.75
-
-  # --- Exemplo com endereço OSC totalmente customizado ---
-  # Use "address" em vez de "parameter" para ignorar o prefixo
-  # padrão "/avatar/parameters/" e mandar para qualquer endereço.
-  Universe:
-    address: "/avatar/parameters/CustomTrigger"
-    type: bool
-    value: true
-
-  # --- Exemplo de presente que dispara MAIS DE UM alvo de uma vez ---
-  # Ex: troca a roupa E liga um efeito ao mesmo tempo.
-  TikTok:
-    parameters:
-      - parameter: "Outfit"
-        type: int
-        value: 4
-      - parameter: "GlowEffect"
-        type: bool
-        value: true
-      - parameter: "EffectIntensity"
-        type: float
-        value: 1.0
+    value: '1'
+    parameter: COAT
+    duration_minutes: 1.0
+    revert:
+    - type: int
+      value: '1'
+      parameter: OUTFIT

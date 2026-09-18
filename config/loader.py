@@ -1,20 +1,34 @@
 """
 config/loader.py
 
-Responsável por carregar e validar o arquivo config.yaml.
-Nenhum outro módulo deve ler o YAML diretamente — tudo passa por aqui,
-assim adicionar/alterar presentes nunca exige tocar em código Python.
+Responsavel por carregar e validar o arquivo config.yaml.
+Nenhum outro modulo deve ler o YAML diretamente -- tudo passa por aqui,
+assim adicionar/alterar presentes nunca exige tocar em codigo Python.
 
-Cada presente pode disparar um ou mais alvos OSC (`OscTarget`). Cada
-alvo tem:
-    - address: endereço OSC final (ex: "/avatar/parameters/Outfit")
-    - value_type: "int" | "float" | "bool" | "string"
-    - value: já convertido para o tipo Python correspondente
+CONCEITOS:
 
-O tipo é sempre explícito no config.yaml (campo `type`) para evitar
-ambiguidade: nem todos avatar usa os mesmos parâmetros, e alguns são
-Int, outros Float, outros Bool — cada presente define exatamente o
-que precisa, sem suposições escondidas no código.
+- OscTarget: um unico comando OSC (endereco + tipo + valor). Ex: liga o
+  parametro "Calcinha" (bool) para true.
+
+- Outfit (conjunto de roupa): uma lista NOMEADA e REUTILIZAVEL de
+  OscTarget, definida uma vez em `outfits:` e referenciada por nome em
+  varios presentes (e no revert padrao), em vez de repetir a mesma
+  lista de pecas em cada presente. Um avatar troca de roupa por PECA
+  (calcinha, sutia, camisa, calca, acessorios...), entao um "conjunto"
+  normalmente e varias OscTarget juntas.
+
+- GiftRule: o que um presente do TikTok faz. Seus alvos vem da
+  combinacao de: um `outfit` (conjunto pre-criado, opcional) + alvos
+  extras ad-hoc (`parameter`/`address`/`parameters`, opcional) -- os
+  dois podem ser usados juntos (ex: veste o "Conjunto1" e ainda liga
+  um efeito extra).
+
+- Duracao + fila: um presente pode ter `duration_minutes` (ou
+  `duration_seconds`). Presentes com duracao entram numa fila
+  exclusiva (handlers/timed_queue.py): so um fica ativo por vez, e ao
+  acabar o tempo o programa manda os alvos de revert (do proprio
+  presente -- `revert`/`revert_outfit` -- ou, se nao definidos, o
+  padrao global `vrchat.default_revert`/`vrchat.default_revert_outfit`).
 """
 
 from __future__ import annotations
@@ -27,7 +41,7 @@ import yaml
 
 VALID_TYPES = ("int", "float", "bool", "string")
 
-# Endereço padrão para parâmetros de avatar do VRChat
+# Endereco padrao para parametros de avatar do VRChat
 AVATAR_PARAM_PREFIX = "/avatar/parameters/"
 
 # Valores aceitos como "verdadeiro"/"falso" quando o YAML traz bool como texto
@@ -50,6 +64,20 @@ class OscTarget:
 class GiftRule:
     gift_name: str
     targets: list[OscTarget] = field(default_factory=list)
+    # None = presente instantâneo, sem fila (dispara e pronto).
+    # Um número = presente "exclusivo": entra na fila, fica ativo por
+    # esse tempo (segundos), depois reverte.
+    duration_seconds: float | None = None
+    # Alvos para onde reverter quando a duração acabar. Se vazio, usa
+    # AppConfig.default_revert.
+    revert_targets: list[OscTarget] = field(default_factory=list)
+    # Nomes dos conjuntos usados (só para exibição na GUI — os alvos já
+    # resolvidos estão em `targets`/`revert_targets` acima).
+    outfit_name: str | None = None
+    revert_outfit_name: str | None = None
+
+    def effective_revert_targets(self, default_revert: list[OscTarget]) -> list[OscTarget]:
+        return self.revert_targets or default_revert
 
 
 @dataclass
@@ -61,6 +89,9 @@ class AppConfig:
     reconnect_max_delay: float
     reconnect_backoff_multiplier: float
     gifts: dict[str, GiftRule]
+    outfits: dict[str, list[OscTarget]] = field(default_factory=dict)
+    default_revert: list[OscTarget] = field(default_factory=list)
+    default_revert_outfit_name: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -169,30 +200,132 @@ def _parse_target(gift_name: str, item: dict[str, Any], warnings: list[str]) -> 
     return OscTarget(address=address, value_type=value_type, value=value)
 
 
-def _parse_gift_entry(gift_name: str, raw: dict[str, Any], warnings: list[str]) -> GiftRule:
+def _parse_target_list(label: str, items: list[dict[str, Any]], warnings: list[str]) -> list[OscTarget]:
+    return [_parse_target(label, item, warnings) for item in items]
+
+
+def _parse_outfits(raw: dict[str, Any], warnings: list[str]) -> dict[str, list[OscTarget]]:
+    outfits_raw = raw.get("outfits") or {}
+    outfits: dict[str, list[OscTarget]] = {}
+    for outfit_name, items in outfits_raw.items():
+        if not isinstance(items, list) or not items:
+            raise ConfigError(
+                f"Conjunto de roupa '{outfit_name}' precisa ser uma lista de alvos "
+                f"(cada um com 'parameter' ou 'address' + 'type' + 'value')."
+            )
+        outfits[outfit_name] = _parse_target_list(f"outfit '{outfit_name}'", items, warnings)
+    return outfits
+
+
+def _parse_duration_seconds(gift_name: str, raw: dict[str, Any]) -> float | None:
+    has_seconds = "duration_seconds" in raw and raw["duration_seconds"] is not None
+    has_minutes = "duration_minutes" in raw and raw["duration_minutes"] is not None
+
+    if has_seconds and has_minutes:
+        raise ConfigError(
+            f"Presente '{gift_name}': defina 'duration_seconds' OU "
+            f"'duration_minutes', não os dois."
+        )
+
+    if has_seconds:
+        try:
+            value = float(raw["duration_seconds"])
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"Presente '{gift_name}': 'duration_seconds' precisa ser um número."
+            )
+    elif has_minutes:
+        try:
+            value = float(raw["duration_minutes"]) * 60.0
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"Presente '{gift_name}': 'duration_minutes' precisa ser um número."
+            )
+    else:
+        return None
+
+    if value <= 0:
+        raise ConfigError(
+            f"Presente '{gift_name}': a duração precisa ser maior que zero."
+        )
+    return value
+
+
+def _resolve_outfit_targets(
+    gift_name: str, outfit_name: str, outfits: dict[str, list[OscTarget]], field_label: str
+) -> list[OscTarget]:
+    if outfit_name not in outfits:
+        raise ConfigError(
+            f"Presente '{gift_name}' usa '{field_label}: {outfit_name}', mas esse "
+            f"conjunto não existe em 'outfits'. Conjuntos disponíveis: "
+            f"{', '.join(sorted(outfits)) or '(nenhum definido)'}."
+        )
+    return list(outfits[outfit_name])
+
+
+def _parse_gift_entry(
+    gift_name: str,
+    raw: dict[str, Any],
+    warnings: list[str],
+    outfits: dict[str, list[OscTarget]],
+) -> GiftRule:
     targets: list[OscTarget] = []
+    outfit_name = raw.get("outfit")
+
+    if outfit_name:
+        targets.extend(_resolve_outfit_targets(gift_name, outfit_name, outfits, "outfit"))
 
     if "parameters" in raw:
-        # Formato de múltiplos alvos por presente
         for item in raw["parameters"]:
             targets.append(_parse_target(gift_name, item, warnings))
     elif "parameter" in raw or "address" in raw:
-        # Formato simples (um único alvo por presente)
         targets.append(_parse_target(gift_name, raw, warnings))
-    else:
+
+    if not targets:
         raise ConfigError(
-            f"Presente '{gift_name}' malformado: defina 'parameter' (ou 'address') "
-            f"+ 'type' + 'value', ou uma lista 'parameters' com esses mesmos campos."
+            f"Presente '{gift_name}' malformado: defina 'outfit' (conjunto "
+            f"pré-criado em 'outfits'), 'parameter'/'address' (um alvo), ou "
+            f"'parameters' (lista de alvos) — pode combinar 'outfit' com "
+            f"alvos extras se quiser."
         )
 
-    return GiftRule(gift_name=gift_name, targets=targets)
+    duration_seconds = _parse_duration_seconds(gift_name, raw)
+
+    revert_targets: list[OscTarget] = []
+    revert_outfit_name = raw.get("revert_outfit")
+    if revert_outfit_name:
+        revert_targets.extend(
+            _resolve_outfit_targets(gift_name, revert_outfit_name, outfits, "revert_outfit")
+        )
+    if "revert" in raw and raw["revert"]:
+        for item in raw["revert"]:
+            revert_targets.append(_parse_target(f"{gift_name} (revert)", item, warnings))
+
+    if revert_targets and duration_seconds is None:
+        warnings.append(
+            f"Presente '{gift_name}' define revert ('revert'/'revert_outfit') mas "
+            f"não tem duração ('duration_minutes'/'duration_seconds') — o revert "
+            f"nunca será usado."
+        )
+
+    return GiftRule(
+        gift_name=gift_name,
+        targets=targets,
+        duration_seconds=duration_seconds,
+        revert_targets=revert_targets,
+        outfit_name=outfit_name,
+        revert_outfit_name=revert_outfit_name,
+    )
 
 
-def parse_gift_rule(gift_name: str, raw: dict[str, Any]) -> tuple[GiftRule, list[str]]:
+def parse_gift_rule(
+    gift_name: str, raw: dict[str, Any], outfits: dict[str, list[OscTarget]] | None = None
+) -> tuple[GiftRule, list[str]]:
     """
     API pública para validar/converter UM presente isoladamente, a partir
-    de um dicionário no mesmo formato usado em config.yaml (com 'parameter'
-    ou 'address', 'type' e 'value', ou uma lista 'parameters').
+    de um dicionário no mesmo formato usado em config.yaml ('outfit',
+    'parameter'/'address', 'type'/'value', 'parameters', 'duration_minutes'/
+    'duration_seconds', 'revert'/'revert_outfit').
 
     Usado pela GUI para validar o formulário de um presente e para o botão
     "Testar", sem precisar tocar no config.yaml inteiro.
@@ -200,7 +333,7 @@ def parse_gift_rule(gift_name: str, raw: dict[str, Any]) -> tuple[GiftRule, list
     Levanta ConfigError se algo estiver inválido. Retorna (GiftRule, warnings).
     """
     warnings: list[str] = []
-    rule = _parse_gift_entry(gift_name, raw, warnings)
+    rule = _parse_gift_entry(gift_name, raw, warnings, outfits or {})
     return rule, warnings
 
 
@@ -225,17 +358,38 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     reconnect_max_delay = float(reconnect_raw.get("max_delay", 60))
     reconnect_backoff_multiplier = float(reconnect_raw.get("backoff_multiplier", 2))
 
-    gifts_raw = raw.get("gifts", {})
-    if not gifts_raw:
-        raise ConfigError(
-            "Nenhum presente configurado em 'gifts'. Adicione ao menos um "
-            "mapeamento presente -> parâmetro OSC no config.yaml."
+    warnings: list[str] = []
+
+    outfits = _parse_outfits(raw, warnings)
+
+    default_revert: list[OscTarget] = []
+    default_revert_outfit_name = vrchat_raw.get("default_revert_outfit")
+    if default_revert_outfit_name:
+        default_revert = _resolve_outfit_targets(
+            "vrchat", default_revert_outfit_name, outfits, "default_revert_outfit"
+        )
+    elif vrchat_raw.get("default_revert"):
+        default_revert = _parse_target_list(
+            "vrchat.default_revert", vrchat_raw["default_revert"], warnings
         )
 
-    warnings: list[str] = []
+    gifts_raw = raw.get("gifts") or {}
+
     gifts: dict[str, GiftRule] = {}
     for gift_name, gift_body in gifts_raw.items():
-        gifts[gift_name] = _parse_gift_entry(gift_name, gift_body, warnings)
+        gifts[gift_name] = _parse_gift_entry(gift_name, gift_body, warnings, outfits)
+
+    # Todos presentes com duração precisa de um jeito de reverter, seja
+    # próprio ('revert'/'revert_outfit') ou o global.
+    for gift_name, rule in gifts.items():
+        if rule.duration_seconds is not None and not rule.revert_targets and not default_revert:
+            raise ConfigError(
+                f"Presente '{gift_name}' tem duração configurada, mas não há "
+                f"revert definido para ele ('revert'/'revert_outfit') nem um "
+                f"padrão global configurado ('vrchat.default_revert' ou "
+                f"'vrchat.default_revert_outfit'). Defina um dos dois para "
+                f"saber para onde o avatar deve voltar quando o tempo acabar."
+            )
 
     return AppConfig(
         tiktok_username=tiktok_username,
@@ -245,6 +399,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         reconnect_max_delay=reconnect_max_delay,
         reconnect_backoff_multiplier=reconnect_backoff_multiplier,
         gifts=gifts,
+        outfits=outfits,
+        default_revert=default_revert,
+        default_revert_outfit_name=default_revert_outfit_name,
         warnings=warnings,
     )
 
@@ -254,7 +411,7 @@ def load_raw(path: str = "config.yaml") -> dict[str, Any]:
     Carrega o config.yaml como dicionário "cru" (mesma estrutura do arquivo),
     sem validar nem converter tipos. Usado pela GUI para editar presentes
     preservando exatamente a forma como cada um foi escrito (parameter vs
-    address, etc.) antes de salvar de volta.
+    address, outfit vs alvos ad-hoc, etc.) antes de salvar de volta.
     """
     if not os.path.isfile(path):
         raise ConfigError(f"Arquivo de configuração não encontrado: {path}")
@@ -267,13 +424,6 @@ def save_raw(path: str, raw: dict[str, Any]) -> None:
     """
     Salva o dicionário "cru" de volta em config.yaml e imediatamente
     revalida o resultado chamando load_config() no arquivo escrito.
-
-    Se a validação falhar, o arquivo NÃO é deixado num estado quebrado:
-    a escrita já aconteceu (é a forma mais simples de garantir que o
-    round-trip do YAML fica idêntico ao que será lido depois), então em
-    caso de erro a exceção é repassada para a GUI mostrar ao usuário —
-    normalmente isso só acontece se um valor foi editado manualmente por
-    fora da GUI com um erro de digitação.
 
     Nota: como usamos PyYAML puro, comentários existentes no config.yaml
     são perdidos ao salvar pela GUI. Isso é avisado ao usuário na própria
