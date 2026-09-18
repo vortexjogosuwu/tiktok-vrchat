@@ -11,14 +11,18 @@ passam pela fila exclusiva em handlers/timed_queue.py: so um fica
 ativo por vez, os outros esperam a vez deles, e ao final do tempo o
 avatar volta para a roupa padrao (revert do proprio presente, ou o
 'vrchat.default_revert' global).
+
+Também expõe ações manuais independentes da fila: voltar para a roupa
+padrão na hora, e o "pânico" (limpar a fila inteira + voltar pra roupa
+padrão de uma vez).
 """
 
 from __future__ import annotations
 
 from config.loader import AppConfig
 from handlers.timed_queue import TimedActionQueue
-from utils_log import log_tiktok
-from vrchat.osc import VRChatOSC
+from utils_log import log_error, log_tiktok
+from vrchat.osc import VRChatOSC, send_target_sequence
 
 
 class GiftHandler:
@@ -65,5 +69,29 @@ class GiftHandler:
             f"Aplicando regra do presente '{gift_name}' (recebido de {user_name}, "
             f"quantidade {quantity})"
         )
-        for target in rule.targets:
-            self.osc_client.send(target.address, target.value)
+        await send_target_sequence(self.osc_client, rule.targets)
+
+    async def revert_to_default(self) -> None:
+        """
+        Manda os alvos da roupa padrão AGORA, direto -- sem passar pela
+        fila. Usado pelo botão "Voltar para roupa padrão" e como parte
+        do "PÂNICO". Não mexe em nenhum presente que esteja na fila (uma
+        eventual ação já agendada ainda vai rodar seu próprio revert
+        depois); para isso, use panic() em vez desta função.
+        """
+        if not self.config.default_revert:
+            log_error(
+                "Não há 'Roupa padrão (revert global)' configurada — nada para reverter."
+            )
+            return
+        log_tiktok("Voltando para a roupa padrão (manual).")
+        await send_target_sequence(self.osc_client, self.config.default_revert)
+
+    async def panic(self) -> None:
+        """
+        PÂNICO: cancela tudo que estiver ativo/esperando na fila de
+        presentes com duração e volta para a roupa padrão imediatamente.
+        """
+        log_tiktok("🚨 PÂNICO: limpando a fila de presentes e voltando à roupa padrão.")
+        await self.timed_queue.panic_clear()
+        await self.revert_to_default()

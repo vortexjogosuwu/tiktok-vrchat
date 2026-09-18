@@ -3,12 +3,15 @@ gui/app.py
 
 Janela principal do TikTok LIVE -> VRChat OSC Bridge.
 
-Tudo que o programa CLI (main.py) faz, esta janela tambem faz, mas com
-mouse: conectar/desconectar da LIVE, ver o log em tempo real, e o mais
-importante -- criar, editar e TESTAR presentes sem precisar mandar
-nada de verdade no TikTok (inclusive presentes com duração/fila: dá
-para testar o ciclo completo -- aplica, espera, reverte -- sem estar
-conectado a nenhuma LIVE).
+Organizada em duas abas:
+- "Presentes": criar/editar/testar os presentes do TikTok.
+- "Conjuntos de roupa": criar/editar/testar conjuntos reutilizáveis de
+  peças, e escolher qual deles é a roupa padrão (revert global) -- tudo
+  num só lugar, sem precisar abrir outra janela.
+
+Os controles de conexão, as ações rápidas (voltar pra padrão / pânico)
+e o log ficam sempre visíveis, fora das abas, porque são usados sempre
+independente do que você está editando.
 """
 
 from __future__ import annotations
@@ -21,11 +24,11 @@ from tkinter import messagebox, ttk
 from typing import Any, Optional
 
 from config.loader import AppConfig, ConfigError, load_config, load_raw, parse_gift_rule, save_raw
-from gui.dialogs import AvatarParametersDialog, DefaultRevertDialog, GiftEditDialog, OutfitManagerDialog
+from gui.dialogs import AvatarParametersDialog, GiftEditDialog, LiveParametersDialog, OutfitEditDialog, TargetEditDialog
 from handlers.gifts import GiftHandler
 from tiktok.listener import TikTokGiftListener
 import utils_log
-from vrchat.osc import VRChatOSC
+from vrchat.osc import VRChatOSC, send_target_sequence
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 
@@ -42,8 +45,8 @@ class App(tk.Tk):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH) -> None:
         super().__init__()
         self.title("TikTok LIVE -> VRChat OSC Bridge")
-        self.geometry("780x560")
-        self.minsize(680, 480)
+        self.geometry("820x600")
+        self.minsize(700, 500)
 
         self.config_path = config_path
         self.gui_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
@@ -84,6 +87,7 @@ class App(tk.Tk):
     # Construcao da interface
     # ------------------------------------------------------------------ #
     def _build_widgets(self) -> None:
+        # --- Conexão (sempre visível) -----------------------------------
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")
 
@@ -118,31 +122,76 @@ class App(tk.Tk):
         self.status_label = ttk.Label(status_frame, text="Desconectado", foreground="#888888")
         self.status_label.pack(side="left", padx=(4, 0))
 
-        # --- Lista de presentes -------------------------------------------------
-        list_frame = ttk.LabelFrame(self, text="Presentes configurados", padding=8)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=(8, 4))
+        # --- Ações rápidas / globais (sempre visíveis) -------------------
+        actions_frame = ttk.Frame(self, padding=(10, 6))
+        actions_frame.pack(fill="x")
+        ttk.Button(
+            actions_frame, text="Voltar para roupa padrão", command=self._on_revert_to_default,
+        ).pack(side="left", padx=2)
+        panic_btn = tk.Button(
+            actions_frame, text="🚨 PÂNICO", command=self._on_panic,
+            background="#c22", foreground="white", activebackground="#a11",
+            activeforeground="white",
+        )
+        panic_btn.pack(side="left", padx=(8, 2))
+        ttk.Button(
+            actions_frame, text="Parâmetros do avatar...", command=self._on_show_avatar_parameters
+        ).pack(side="left", padx=(16, 2))
+        ttk.Button(
+            actions_frame, text="Descobrir valores ao vivo...", command=self._on_show_live_parameters
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            actions_frame, text="Salvar configuração", command=self._on_save_config
+        ).pack(side="right", padx=2)
 
-        columns = ("presente", "conjunto", "endereco", "tipo", "valor", "duracao")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        # --- Abas: Presentes / Conjuntos de roupa -------------------------
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        gifts_tab = ttk.Frame(notebook)
+        outfits_tab = ttk.Frame(notebook)
+        notebook.add(gifts_tab, text="Presentes")
+        notebook.add(outfits_tab, text="Conjuntos de roupa")
+
+        self._build_gifts_tab(gifts_tab)
+        self._build_outfits_tab(outfits_tab)
+
+        # --- Log (sempre visível, embaixo das abas) -----------------------
+        log_frame = ttk.LabelFrame(self, text="Log", padding=6)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+
+        self.log_text = tk.Text(log_frame, height=9, state="disabled", wrap="word")
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        log_scroll.pack(side="left", fill="y")
+
+        self.log_text.tag_configure("TIKTOK", foreground="#1a5aa8")
+        self.log_text.tag_configure("OSC", foreground="#1a8a1a")
+        self.log_text.tag_configure("ERROR", foreground="#c22")
+
+    def _build_gifts_tab(self, parent: ttk.Frame) -> None:
+        list_frame = ttk.LabelFrame(parent, text="Presentes configurados", padding=8)
+        list_frame.pack(fill="both", expand=True, padx=6, pady=(6, 4))
+
+        columns = ("presente", "conjunto", "duracao", "alvos")
+        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("presente", text="Presente")
         self.tree.heading("conjunto", text="Conjunto")
-        self.tree.heading("endereco", text="Endereco OSC")
-        self.tree.heading("tipo", text="Tipo")
-        self.tree.heading("valor", text="Valor")
         self.tree.heading("duracao", text="Duração")
-        self.tree.column("presente", width=110)
-        self.tree.column("conjunto", width=90, anchor="center")
-        self.tree.column("endereco", width=230)
-        self.tree.column("tipo", width=55, anchor="center")
-        self.tree.column("valor", width=70, anchor="center")
+        self.tree.heading("alvos", text="Itens")
+        self.tree.column("presente", width=140)
+        self.tree.column("conjunto", width=100, anchor="center")
         self.tree.column("duracao", width=80, anchor="center")
+        self.tree.column("alvos", width=340)
         self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.bind("<Double-1>", lambda _e: self._on_edit_gift())
 
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="left", fill="y")
 
-        btns_frame = ttk.Frame(self, padding=(10, 0))
+        btns_frame = ttk.Frame(parent, padding=(6, 0))
         btns_frame.pack(fill="x")
         ttk.Button(btns_frame, text="Novo presente", command=self._on_new_gift).pack(
             side="left", padx=2
@@ -154,37 +203,49 @@ class App(tk.Tk):
             side="left", padx=2
         )
         ttk.Button(
-            btns_frame, text="Testar selecionado(s)", command=self._on_test_selected
+            btns_frame, text="Testar (Completo)", command=self._on_test_gift_full
         ).pack(side="left", padx=(12, 2))
         ttk.Button(
-            btns_frame, text="Testar presente (completo)", command=self._on_test_gift_full
+            btns_frame, text="Testar (Aplicar)", command=self._on_test_gift_apply_only
         ).pack(side="left", padx=2)
+
+    def _build_outfits_tab(self, parent: ttk.Frame) -> None:
+        list_frame = ttk.LabelFrame(parent, text="Conjuntos de roupa", padding=8)
+        list_frame.pack(fill="both", expand=True, padx=6, pady=(6, 4))
+
+        columns = ("padrao", "nome", "pecas")
+        self.outfits_tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings", selectmode="browse"
+        )
+        self.outfits_tree.heading("padrao", text="Padrão?")
+        self.outfits_tree.heading("nome", text="Conjunto")
+        self.outfits_tree.heading("pecas", text="Peças")
+        self.outfits_tree.column("padrao", width=60, anchor="center")
+        self.outfits_tree.column("nome", width=140)
+        self.outfits_tree.column("pecas", width=420)
+        self.outfits_tree.pack(side="left", fill="both", expand=True)
+
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.outfits_tree.yview)
+        self.outfits_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="left", fill="y")
+
+        btns_frame = ttk.Frame(parent, padding=(6, 0))
+        btns_frame.pack(fill="x")
+        ttk.Button(btns_frame, text="Novo conjunto", command=self._on_new_outfit).pack(
+            side="left", padx=2
+        )
+        ttk.Button(btns_frame, text="Editar conjunto", command=self._on_edit_outfit).pack(
+            side="left", padx=2
+        )
+        ttk.Button(btns_frame, text="Remover conjunto", command=self._on_remove_outfit).pack(
+            side="left", padx=2
+        )
         ttk.Button(
-            btns_frame, text="Conjuntos de roupa", command=self._on_manage_outfits
+            btns_frame, text="Testar conjunto (completo)", command=self._on_test_outfit
         ).pack(side="left", padx=(12, 2))
         ttk.Button(
-            btns_frame, text="Roupa padrão (revert global)", command=self._on_edit_default_revert
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            btns_frame, text="Parâmetros do avatar...", command=self._on_show_avatar_parameters
+            btns_frame, text="★ Definir como roupa padrão", command=self._on_set_default_outfit
         ).pack(side="left", padx=(12, 2))
-        ttk.Button(
-            btns_frame, text="Salvar configuracao", command=self._on_save_config
-        ).pack(side="right", padx=2)
-
-        # --- Log -------------------------------------------------------------
-        log_frame = ttk.LabelFrame(self, text="Log", padding=6)
-        log_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
-
-        self.log_text = tk.Text(log_frame, height=10, state="disabled", wrap="word")
-        self.log_text.pack(side="left", fill="both", expand=True)
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        log_scroll.pack(side="left", fill="y")
-
-        self.log_text.tag_configure("TIKTOK", foreground="#1a5aa8")
-        self.log_text.tag_configure("OSC", foreground="#1a8a1a")
-        self.log_text.tag_configure("ERROR", foreground="#c22")
 
     # ------------------------------------------------------------------ #
     # Carregar/preencher a partir do config.yaml
@@ -216,10 +277,14 @@ class App(tk.Tk):
         for warning in self.app_config.warnings:
             utils_log.log_error(f"[CONFIG] {warning}")
 
-        self._refresh_tree()
+        self._refresh_all_trees()
         self._ensure_osc_client()
 
-    def _refresh_tree(self) -> None:
+    def _refresh_all_trees(self) -> None:
+        self._refresh_gifts_tree()
+        self._refresh_outfits_tree()
+
+    def _refresh_gifts_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
         if not self.app_config:
             return
@@ -230,15 +295,26 @@ class App(tk.Tk):
                 duration_label = (
                     f"{int(minutes)} min" if minutes == int(minutes) else f"{minutes:.1f} min"
                 )
-            for idx, target in enumerate(rule.targets):
-                iid = f"{gift_name}#{idx}"
-                self.tree.insert(
-                    "", "end", iid=iid,
-                    values=(
-                        gift_name, rule.outfit_name or "-", target.address,
-                        target.value_type, target.value, duration_label,
-                    ),
-                )
+            targets_summary = ", ".join(
+                f"{t.address.rsplit('/', 1)[-1]}={t.value!r}" for t in rule.targets
+            )
+            alvos_label = f"({len(rule.targets)}) {targets_summary}" if rule.targets else "(0)"
+            self.tree.insert(
+                "", "end", iid=gift_name,
+                values=(gift_name, rule.outfit_name or "-", duration_label, alvos_label),
+            )
+
+    def _refresh_outfits_tree(self) -> None:
+        self.outfits_tree.delete(*self.outfits_tree.get_children())
+        default_name = self.app_config.default_revert_outfit_name if self.app_config else None
+        for name, items in self._current_outfits_raw().items():
+            pieces = ", ".join(
+                f"{t.get('parameter') or t.get('address')}={t.get('value')!r}" for t in items
+            )
+            self.outfits_tree.insert(
+                "", "end", iid=name,
+                values=("★" if name == default_name else "", name, pieces),
+            )
 
     # ------------------------------------------------------------------ #
     # OSC (teste manual, independente do TikTok estar conectado)
@@ -260,9 +336,9 @@ class App(tk.Tk):
         """
         Cria (uma única vez, reaproveitando depois) o GiftHandler que
         processa presentes -- usado tanto pela conexão real com o TikTok
-        quanto pelo botão "Testar presente (completo)". Isso garante que
-        testar funciona exatamente como a LIVE de verdade funcionaria
-        (mesma fila, mesmo revert), com ou sem estar conectado.
+        quanto pelos botões de teste. Isso garante que testar funciona
+        exatamente como a LIVE de verdade funcionaria (mesma fila, mesmo
+        revert), com ou sem estar conectado.
         """
         self._ensure_osc_client()
         assert self.app_config is not None
@@ -292,6 +368,39 @@ class App(tk.Tk):
 
         asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 
+    def _on_revert_to_default(self) -> None:
+        """Troca para a roupa padrão AGORA, sem mexer na fila -- funciona
+        com ou sem estar conectado à LIVE."""
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+        gift_handler = self._ensure_gift_handler()
+
+        async def _run() -> None:
+            await gift_handler.revert_to_default()
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+    def _on_panic(self) -> None:
+        """PÂNICO: pede confirmação, limpa a fila inteira e volta pra
+        roupa padrão imediatamente."""
+        if not messagebox.askyesno(
+            "Limpar fila de presentes?",
+            "Isso vai cancelar TODOS os presentes com duração que estejam "
+            "ativos ou esperando na fila, e trocar para a roupa padrão "
+            "imediatamente.\n\nContinuar?",
+        ):
+            return
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+        gift_handler = self._ensure_gift_handler()
+
+        async def _run() -> None:
+            await gift_handler.panic()
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
     def _test_raw_target(self, raw_target: dict[str, Any]) -> None:
         """Valida e envia um alvo isolado (usado pelos dialogos de edicao)."""
         self._ensure_osc_client()
@@ -302,20 +411,36 @@ class App(tk.Tk):
             assert self.osc_client is not None
             self.osc_client.send(target.address, target.value)
 
-    def _on_test_selected(self) -> None:
-        self._ensure_osc_client()
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showinfo("Nada selecionado", "Selecione um ou mais presentes na lista.")
+    def _on_test_gift_apply_only(self) -> None:
+        """
+        Testar (Aplicar): aplica TODOS os itens do presente selecionado
+        agora, só para teste -- NÃO entra na fila, NÃO conta duração e
+        NÃO reverte para a roupa padrão depois. Serve só pra conferir
+        se todos os itens do presente aplicam corretamente, sem afetar
+        a fila nem o estado normal do sistema.
+        """
+        gift_name = self._selected_gift_name()
+        if gift_name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+            return
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
             return
 
-        for iid in selection:
-            gift_name, idx_str = iid.split("#")
-            idx = int(idx_str)
-            rule = self.app_config.gifts[gift_name]  # type: ignore[union-attr]
-            target = rule.targets[idx]
-            assert self.osc_client is not None
-            self.osc_client.send(target.address, target.value)
+        self._ensure_osc_client()
+        assert self.app_config is not None
+        rule = self.app_config.gifts.get(gift_name)
+        if rule is None:
+            return
+        osc_client = self.osc_client
+
+        async def _run() -> None:
+            utils_log.log_tiktok(
+                f"Testando '{gift_name}' (aplicar apenas -- sem fila, sem revert)..."
+            )
+            await send_target_sequence(osc_client, rule.targets)
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 
     # ------------------------------------------------------------------ #
     # CRUD de presentes (editando self.raw_config["gifts"])
@@ -403,56 +528,6 @@ class App(tk.Tk):
         gifts[new_name] = new_raw_gift
         self._reload_app_config_from_raw()
 
-    def _on_manage_outfits(self) -> None:
-        dlg = OutfitManagerDialog(
-            self, on_test_target=self._test_raw_target,
-            outfits_raw=self._current_outfits_raw(),
-        )
-        self.wait_window(dlg)
-        if dlg.result is None:
-            return
-        self.raw_config["outfits"] = dlg.result
-        self._reload_app_config_from_raw()
-
-    def _on_edit_default_revert(self) -> None:
-        vrchat_raw = self.raw_config.setdefault("vrchat", {})
-        dlg = DefaultRevertDialog(
-            self, on_test_target=self._test_raw_target,
-            outfit_names=list(self._current_outfits_raw().keys()),
-            outfit_name=vrchat_raw.get("default_revert_outfit"),
-            targets=vrchat_raw.get("default_revert") or [],
-        )
-        self.wait_window(dlg)
-        if dlg.result is None:
-            return
-        if dlg.result["outfit"]:
-            vrchat_raw["default_revert_outfit"] = dlg.result["outfit"]
-            vrchat_raw.pop("default_revert", None)
-        else:
-            vrchat_raw["default_revert"] = dlg.result["targets"]
-            vrchat_raw.pop("default_revert_outfit", None)
-        self._reload_app_config_from_raw()
-
-    def _on_show_avatar_parameters(self) -> None:
-        AvatarParametersDialog(self, on_use_parameter=self._on_use_avatar_parameter)
-
-    def _on_use_avatar_parameter(self, name: str, loader_type: str) -> None:
-        """Chamado quando o usuário escolhe 'Usar este parâmetro...' na lista
-        de parâmetros do avatar — abre um alvo já pré-preenchido para ele
-        só completar o valor e testar/adicionar num presente ou conjunto."""
-        from gui.dialogs import TargetEditDialog
-
-        dlg = TargetEditDialog(self, on_test=self._test_raw_target)
-        dlg.set_parameter(name, loader_type)
-        messagebox.showinfo(
-            "Parâmetro pronto",
-            f"Preenchi o parâmetro '{name}' (tipo detectado: {loader_type}).\n"
-            f"Defina o valor e clique em 'Testar agora' para conferir no avatar, "
-            f"depois 'OK'. Você pode então copiar esse alvo manualmente para um "
-            f"presente ou conjunto (ou usar como referência).",
-            parent=self,
-        )
-
     def _on_remove_gift(self) -> None:
         gift_name = self._selected_gift_name()
         if gift_name is None:
@@ -470,11 +545,172 @@ class App(tk.Tk):
         selection = self.tree.selection()
         if not selection:
             return None
-        return selection[0].split("#")[0]
+        return selection[0]
+
+    # ------------------------------------------------------------------ #
+    # CRUD de conjuntos de roupa (editando self.raw_config["outfits"])
+    # ------------------------------------------------------------------ #
+    def _selected_outfit_name(self) -> Optional[str]:
+        selection = self.outfits_tree.selection()
+        if not selection:
+            return None
+        return selection[0]
+
+    def _rename_outfit_references(self, old_name: str, new_name: str) -> None:
+        """Ao renomear um conjunto, atualiza quem apontava pro nome antigo
+        (padrão global + presentes que usam esse conjunto)."""
+        vrchat_raw = self.raw_config.get("vrchat") or {}
+        if vrchat_raw.get("default_revert_outfit") == old_name:
+            vrchat_raw["default_revert_outfit"] = new_name
+        for gift_body in (self.raw_config.get("gifts") or {}).values():
+            if gift_body.get("outfit") == old_name:
+                gift_body["outfit"] = new_name
+            if gift_body.get("revert_outfit") == old_name:
+                gift_body["revert_outfit"] = new_name
+
+    def _on_new_outfit(self) -> None:
+        dlg = OutfitEditDialog(
+            self, on_test_target=self._test_raw_target,
+            existing_names=set(self._current_outfits_raw().keys()),
+        )
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+        name, targets = dlg.result
+        self.raw_config.setdefault("outfits", {})[name] = targets
+        self._reload_app_config_from_raw()
+
+    def _on_edit_outfit(self) -> None:
+        name = self._selected_outfit_name()
+        if name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um conjunto na lista.")
+            return
+
+        targets = self._current_outfits_raw().get(name, [])
+        dlg = OutfitEditDialog(
+            self, on_test_target=self._test_raw_target,
+            name=name, targets=targets,
+            existing_names=set(self._current_outfits_raw().keys()),
+            editing_original_name=name,
+        )
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+
+        new_name, new_targets = dlg.result
+        outfits = self.raw_config.setdefault("outfits", {})
+        if new_name != name:
+            del outfits[name]
+            self._rename_outfit_references(name, new_name)
+        outfits[new_name] = new_targets
+        self._reload_app_config_from_raw()
+
+    def _on_remove_outfit(self) -> None:
+        name = self._selected_outfit_name()
+        if name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um conjunto na lista.")
+            return
+
+        vrchat_raw = self.raw_config.get("vrchat") or {}
+        used_by = [
+            gift_name for gift_name, body in (self.raw_config.get("gifts") or {}).items()
+            if body.get("outfit") == name or body.get("revert_outfit") == name
+        ]
+        is_default = vrchat_raw.get("default_revert_outfit") == name
+
+        warning_lines = []
+        if is_default:
+            warning_lines.append("• É a roupa padrão global atual.")
+        if used_by:
+            warning_lines.append(f"• Usado pelos presentes: {', '.join(used_by)}")
+        warning = ("\n\n" + "\n".join(warning_lines)) if warning_lines else ""
+
+        if not messagebox.askyesno(
+            "Remover conjunto",
+            f"Remover o conjunto '{name}'?{warning}\n\n"
+            f"(Se algo ainda referenciar esse nome depois de remover, a "
+            f"configuração vai dar erro até você corrigir.)",
+        ):
+            return
+
+        outfits = self.raw_config.get("outfits") or {}
+        outfits.pop(name, None)
+        if is_default:
+            vrchat_raw.pop("default_revert_outfit", None)
+        self._reload_app_config_from_raw()
+
+    def _on_test_outfit(self) -> None:
+        """Aplica todas as peças do conjunto selecionado agora, em
+        sequência (com a pausa automática) -- funciona com ou sem estar
+        conectado à LIVE."""
+        name = self._selected_outfit_name()
+        if name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um conjunto na lista.")
+            return
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+
+        self._ensure_osc_client()
+        items = self._current_outfits_raw().get(name, [])
+        try:
+            rule, warnings = parse_gift_rule(name, {"parameters": items})
+        except ConfigError as exc:
+            messagebox.showerror("Configuração inválida", str(exc))
+            return
+        for warning in warnings:
+            utils_log.log_error(f"[CONFIG] {warning}")
+
+        osc_client = self.osc_client
+
+        async def _run() -> None:
+            utils_log.log_tiktok(f"Testando conjunto '{name}' (todas as peças)...")
+            await send_target_sequence(osc_client, rule.targets)
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+    def _on_set_default_outfit(self) -> None:
+        name = self._selected_outfit_name()
+        if name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um conjunto na lista.")
+            return
+        vrchat_raw = self.raw_config.setdefault("vrchat", {})
+        vrchat_raw["default_revert_outfit"] = name
+        vrchat_raw.pop("default_revert", None)
+        self._reload_app_config_from_raw()
+        utils_log.log_tiktok(f"'{name}' definido como roupa padrão (ainda não salvo em disco).")
+
+    def _on_show_avatar_parameters(self) -> None:
+        AvatarParametersDialog(self, on_use_parameter=self._on_use_avatar_parameter)
+
+    def _on_use_avatar_parameter(
+        self, name: str, loader_type: str, value=None, address: str | None = None
+    ) -> None:
+        """Chamado quando o usuário escolhe 'Usar este parâmetro...' na lista
+        de parâmetros do avatar — abre um alvo já pré-preenchido para ele
+        só completar o valor e testar/adicionar num presente ou conjunto.
+        Usa sempre o endereço OSC exato (quando disponível), em vez de
+        reconstruir a partir do nome -- alguns parâmetros têm nome de
+        exibição diferente do endereço real (ex: espaço vs underline)."""
+        dlg = TargetEditDialog(self, on_test=self._test_raw_target)
+        dlg.set_parameter(name, loader_type, value=value, address=address)
+        messagebox.showinfo(
+            "Parâmetro pronto",
+            f"Preenchi o parâmetro '{name}' (tipo detectado: {loader_type}).\n"
+            f"Defina o valor e clique em 'Testar agora' para conferir no avatar, "
+            f"depois 'OK'. Você pode então copiar esse alvo manualmente para um "
+            f"presente ou conjunto (ou usar como referência).",
+            parent=self,
+        )
+
+    def _on_show_live_parameters(self) -> None:
+        LiveParametersDialog(
+            self, async_loop=self.async_loop, on_use_parameter=self._on_use_avatar_parameter
+        )
 
     def _reload_app_config_from_raw(self) -> None:
         """Revalida self.raw_config em memoria (sem tocar no arquivo ainda)
-        e atualiza a lista na tela."""
+        e atualiza as listas na tela."""
         warnings: list[str] = []
         gifts = {}
         try:
@@ -514,8 +750,8 @@ class App(tk.Tk):
                     raise ConfigError(
                         f"Presente '{gift_name}' tem duração configurada, mas não há "
                         f"revert definido para ele nem uma roupa padrão global "
-                        f"configurada. Use o botão 'Roupa padrão (revert global)' ou "
-                        f"defina um 'reverter para' neste presente."
+                        f"configurada. Defina uma na aba 'Conjuntos de roupa' ou "
+                        f"escolha um 'reverter para' neste presente."
                     )
         except ConfigError as exc:
             messagebox.showerror("Configuracao invalida", str(exc))
@@ -527,13 +763,13 @@ class App(tk.Tk):
             self.app_config.default_revert = default_revert
             self.app_config.default_revert_outfit_name = default_revert_outfit_name
             self.app_config.warnings = warnings
-        self._refresh_tree()
+        self._refresh_all_trees()
 
     def _on_save_config(self) -> None:
         if not messagebox.askyesno(
             "Salvar configuracao",
-            "Isso vai sobrescrever o config.yaml com os presentes atuais.\n"
-            "Comentarios do arquivo original serao perdidos.\n\n"
+            "Isso vai sobrescrever o config.yaml com os presentes e conjuntos "
+            "atuais.\nComentarios do arquivo original serao perdidos.\n\n"
             "Deseja continuar?",
         ):
             return
@@ -558,8 +794,8 @@ class App(tk.Tk):
             "config.yaml atualizado com sucesso." + (
                 "\n\nVocê está conectado à LIVE agora: para a conexão atual "
                 "usar essa configuração nova, clique em Desconectar e depois "
-                "Conectar de novo. (O botão 'Testar presente' já usa a "
-                "configuração nova automaticamente, sem precisar reconectar.)"
+                "Conectar de novo. (Os botões de teste já usam a configuração "
+                "nova automaticamente, sem precisar reconectar.)"
                 if self.connected else ""
             ),
         )

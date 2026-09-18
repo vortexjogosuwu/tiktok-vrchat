@@ -13,6 +13,9 @@ Regras implementadas (conforme pedido):
   proximo da fila (se houver).
 - Se a fila estiver vazia quando um termina, o avatar simplesmente
   fica na roupa padrao ate o proximo presente com duracao chegar.
+- panic_clear() -- limpa tudo (fila + o que estiver ativo agora) sem
+  rodar o revert de ninguem, pra ser seguido de um revert manual único
+  (usado pelo botão de PÂNICO da GUI).
 
 Presentes SEM duracao configurada nao passam por esta fila -- eles
 continuam disparando na hora, em paralelo, exatamente como antes.
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 
 from config.loader import OscTarget
 from utils_log import log_error, log_tiktok
-from vrchat.osc import VRChatOSC
+from vrchat.osc import VRChatOSC, send_target_sequence
 
 
 def _format_duration(seconds: float) -> str:
@@ -112,8 +115,7 @@ class TimedActionQueue:
                     f"{len(action.targets)} alvo(s), revert com "
                     f"{len(action.revert_targets)} alvo(s)"
                 )
-                for target in action.targets:
-                    self.osc_client.send(target.address, target.value)
+                await send_target_sequence(self.osc_client, action.targets)
 
                 await asyncio.sleep(action.duration_seconds)
 
@@ -121,19 +123,53 @@ class TimedActionQueue:
                     log_tiktok(
                         f"Tempo de '{action.gift_name}' esgotado -- voltando a roupa padrao"
                     )
-                    for target in action.revert_targets:
-                        self.osc_client.send(target.address, target.value)
+                    await send_target_sequence(self.osc_client, action.revert_targets)
                 else:
                     log_error(
                         f"Tempo de '{action.gift_name}' esgotado, mas NÃO havia "
                         f"nenhum alvo de revert configurado -- nada foi enviado "
                         f"e o avatar continua com a roupa que foi aplicada."
                     )
+            except asyncio.CancelledError:
+                # Interrompido (ex: botão de PÂNICO) -- não roda o revert
+                # deste item, quem cancelou é quem decide o que fazer.
+                log_tiktok(f"'{action.gift_name}' foi interrompido antes de terminar.")
+                raise
             except Exception as exc:  # noqa: BLE001
                 log_error(f"Erro processando fila de '{action.gift_name}': {exc}")
             finally:
                 self._busy = False
                 self._queue.task_done()
+
+    async def panic_clear(self) -> None:
+        """
+        PÂNICO: descarta tudo que estava esperando na fila e interrompe
+        o que estiver ativo agora NA HORA (sem deixar ele mandar seu
+        próprio revert -- quem chamou isso vai mandar um revert manual
+        logo em seguida). Depois de limpar, a fila fica pronta pra
+        receber novos presentes normalmente.
+        """
+        if self._queue is not None:
+            removed = 0
+            while not self._queue.empty():
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                    removed += 1
+                except asyncio.QueueEmpty:
+                    break
+            if removed:
+                log_tiktok(f"Fila limpa: {removed} presente(s) pendente(s) descartado(s).")
+
+        if self._worker_task is not None and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+
+        self._busy = False
 
     def pending_count(self) -> int:
         """Quantos itens estao esperando na fila (nao conta o que esta ativo agora)."""
