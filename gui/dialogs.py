@@ -19,7 +19,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from config.loader import ConfigError, VALID_TYPES, parse_gift_rule
+from config.loader import ConfigError, VALID_TYPES, cast_value, parse_gift_rule
 from tiktok.catalog import COMMON_GIFT_SUGGESTIONS, fetch_live_gift_catalog
 from vrchat.discovery import default_osc_config_dir, find_avatars
 
@@ -131,14 +131,21 @@ class TargetEditDialog(tk.Toplevel):
         if not name:
             raise ConfigError("Informe o nome do parametro ou o endereco OSC.")
 
-        raw = {
-            "type": self.type_var.get(),
-            "value": self.value_var.get(),
-        }
+        value_type = self.type_var.get()
+        # Converte o texto do campo pro tipo Python certo (int/float/bool/
+        # string) ANTES de salvar -- assim o YAML grava "value: 0", não
+        # "value: '0'", e o nome/tipo ficam exatamente como configurados.
+        typed_value = cast_value(value_type, self.value_var.get(), label=name)
+
+        # Ordem fixa de chaves (endereço/parâmetro, depois tipo, depois
+        # valor) em todos alvos salvo, pra ficar sempre consistente no YAML.
+        raw: dict = {}
         if self.mode_var.get() == "address":
             raw["address"] = name
         else:
             raw["parameter"] = name
+        raw["type"] = value_type
+        raw["value"] = typed_value
         return raw
 
     def _on_test(self):

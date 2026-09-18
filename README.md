@@ -92,6 +92,14 @@ Abre uma janela com:
     final. Funciona **com ou sem estar conectado ao TikTok** — não
     precisa abrir uma LIVE pra testar se a fila e o revert estão
     funcionando.
+  - **Voltar para roupa padrão**: troca pra roupa padrão (`vrchat.default_revert`/
+    `default_revert_outfit`) imediatamente, sem mexer em nada que esteja
+    na fila. Útil pra "resetar" o avatar manualmente a qualquer momento.
+  - **🚨 PÂNICO**: pede confirmação e, se você confirmar, cancela **tudo**
+    que estiver ativo ou esperando na fila de presentes com duração (sem
+    deixar nenhum deles rodar o próprio revert) e troca pra roupa padrão
+    na hora. Serve como um botão de emergência caso algo saia do
+    controle durante uma LIVE.
   - Ao criar ou editar um presente, cada alvo também tem seu próprio
     botão **"Testar"** dentro do formulário, então dá pra validar
     se o parâmetro está certo *antes mesmo* de salvar.
@@ -200,6 +208,21 @@ gifts:
 - No VRChat, cada parâmetro precisa existir no **Animator Controller** do
   seu avatar como um parâmetro Int/Float/Bool sincronizado, e o VRChat
   precisa estar com **OSC habilitado** (Action Menu → Options → OSC → Enabled).
+
+### Pausa automática entre alvos (parâmetros "gatilho")
+
+Quando um presente ou conjunto tem **mais de um alvo** (ex: liga um
+parâmetro e depois desliga, como um `OUTFIT = 1` seguido de `OUTFIT = 0`
+pra disparar uma transição no Animator), o programa manda cada um em
+**sequência**, com uma pequena pausa automática entre eles (não dá pra
+configurar isso em segundos de propósito — é só uma folga de segurança
+fixa). Isso existe porque, se os dois valores forem mandados juntos
+demais, o VRChat pode nunca chegar a "ver" o valor intermediário —
+comum em avatares que usam um parâmetro Int como gatilho de animação.
+
+Isso vale pra qualquer lista de alvos: presentes com `parameters:`,
+conjuntos de roupa, e o revert (próprio ou padrão global). Não muda
+nada pra alvos únicos.
 
 ### Conjuntos de roupa (outfits) — troca por peça
 

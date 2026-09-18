@@ -172,6 +172,19 @@ class App(tk.Tk):
             btns_frame, text="Salvar configuracao", command=self._on_save_config
         ).pack(side="right", padx=2)
 
+        btns_frame2 = ttk.Frame(self, padding=(10, 4))
+        btns_frame2.pack(fill="x")
+        ttk.Button(
+            btns_frame2, text="Voltar para roupa padrão",
+            command=self._on_revert_to_default,
+        ).pack(side="left", padx=2)
+        panic_btn = tk.Button(
+            btns_frame2, text="🚨 PÂNICO", command=self._on_panic,
+            background="#c22", foreground="white", activebackground="#a11",
+            activeforeground="white",
+        )
+        panic_btn.pack(side="left", padx=(8, 2))
+
         # --- Log -------------------------------------------------------------
         log_frame = ttk.LabelFrame(self, text="Log", padding=6)
         log_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
@@ -289,6 +302,39 @@ class App(tk.Tk):
 
         async def _run() -> None:
             await gift_handler.handle_gift(gift_name, "Teste manual", 1)
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+    def _on_revert_to_default(self) -> None:
+        """Troca para a roupa padrão AGORA, sem mexer na fila -- funciona
+        com ou sem estar conectado à LIVE."""
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+        gift_handler = self._ensure_gift_handler()
+
+        async def _run() -> None:
+            await gift_handler.revert_to_default()
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+    def _on_panic(self) -> None:
+        """PÂNICO: pede confirmação, limpa a fila inteira e volta pra
+        roupa padrão imediatamente."""
+        if not messagebox.askyesno(
+            "Limpar fila de presentes?",
+            "Isso vai cancelar TODOS os presentes com duração que estejam "
+            "ativos ou esperando na fila, e trocar para a roupa padrão "
+            "imediatamente.\n\nContinuar?",
+        ):
+            return
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+        gift_handler = self._ensure_gift_handler()
+
+        async def _run() -> None:
+            await gift_handler.panic()
 
         asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 

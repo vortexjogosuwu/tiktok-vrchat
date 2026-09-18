@@ -13,13 +13,13 @@ outfits:
   - parameter: OUTFIT
     type: int
     value: 1
+  - parameter: OUTFIT
+    type: int
+    value: 0
 gifts:
   Rose:
     type: int
-    value: '1'
+    value: 1
     parameter: COAT
     duration_minutes: 1.0
-    revert:
-    - type: int
-      value: '1'
-      parameter: OUTFIT
+    revert_outfit: Padrao

@@ -15,11 +15,23 @@ endereço OSC que você queira customizar no config.yaml.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import TYPE_CHECKING, Any
 
 from pythonosc.udp_client import SimpleUDPClient
 
 from utils_log import log_error, log_osc
+
+if TYPE_CHECKING:
+    from config.loader import OscTarget
+
+# Pausa automática entre o envio de cada alvo de uma mesma lista (presente
+# ou conjunto de roupa). Existe porque alguns avatares usam parâmetros
+# "gatilho" (ex: liga um Int e depois desliga em seguida, pra disparar uma
+# transição no Animator) -- se os dois valores forem mandados juntos demais,
+# o VRChat pode nunca chegar a processar o valor intermediário. Não é
+# configurável pelo usuário de propósito: é só uma pequena folga de segurança.
+INTER_TARGET_DELAY_SECONDS = 0.15
 
 
 class VRChatOSC:
@@ -60,3 +72,22 @@ class VRChatOSC:
         except Exception as exc:  # noqa: BLE001 - nunca derrubar o app aqui
             log_error(f"Falha inesperada ao enviar OSC: {exc}")
             return False
+
+
+async def send_target_sequence(
+    osc_client: "VRChatOSC",
+    targets: "list[OscTarget]",
+    delay: float = INTER_TARGET_DELAY_SECONDS,
+) -> None:
+    """
+    Envia uma lista de alvos EM SEQUÊNCIA, com uma pequena pausa automática
+    entre cada um (exceto depois do último). Use isso sempre que mais de um
+    alvo precisa ser aplicado junto (um presente com vários alvos, um
+    conjunto de roupa, um revert) -- em vez de mandar tudo instantaneamente,
+    o que pode fazer o VRChat "perder" valores intermediários em parâmetros
+    do tipo gatilho.
+    """
+    for index, target in enumerate(targets):
+        osc_client.send(target.address, target.value)
+        if index < len(targets) - 1 and delay > 0:
+            await asyncio.sleep(delay)

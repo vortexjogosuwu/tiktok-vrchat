@@ -337,6 +337,17 @@ def parse_gift_rule(
     return rule, warnings
 
 
+def cast_value(value_type: str, raw_value: Any, label: str = "valor") -> Any:
+    """
+    API pública: converte `raw_value` (normalmente uma string vinda de um
+    campo de texto da GUI) para o tipo Python correspondente a `value_type`
+    ("int"/"float"/"bool"/"string"), com a mesma validação usada ao
+    carregar o config.yaml. Usado ao SALVAR pela GUI, para o YAML gravado
+    guardar o tipo certo (`value: 0`, não `value: '0'`).
+    """
+    return _cast_value(label, value_type, raw_value)
+
+
 def load_config(path: str = "config.yaml") -> AppConfig:
     if not os.path.isfile(path):
         raise ConfigError(f"Arquivo de configuração não encontrado: {path}")
