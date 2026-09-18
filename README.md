@@ -89,26 +89,31 @@ Abre uma janela com:
     deixar nenhum deles rodar o próprio revert) e troca pra roupa padrão
     na hora. Serve como um botão de emergência caso algo saia do
     controle durante uma LIVE.
-  - **Parâmetros do avatar...** e **Salvar configuração** (essa última
+  - **Parâmetros do avatar...**, **Descobrir valores ao vivo...** (veja
+    a seção própria abaixo) e **Salvar configuração** (essa última
     grava tudo de volta no `config.yaml` — ⚠️ isso reescreve o arquivo
     inteiro, comentários do YAML original são perdidos nesse processo,
     mas os valores continuam intactos. Se você já estiver conectado à
     LIVE quando salvar, a conexão atual continua usando a configuração
     antiga até desconectar e conectar de novo — os botões de teste já
     usam a versão nova na hora, sem precisar reconectar).
-- **Aba "Presentes"**: a lista de presentes configurados (endereço,
-  tipo, valor, duração de cada alvo).
+- **Aba "Presentes"**: a lista mostra **um presente por linha** (não
+  importa quantos itens/parâmetros ele mexa — a coluna "Itens" resume
+  todos, tipo `(5) OUTFIT=2, TOP=1, ...`). Duplo-clique numa linha abre
+  pra edição.
   - **Novo presente** / **Editar presente** / **Remover presente**.
-  - **Testar selecionado(s)**: dispara o(s) comando(s) OSC da linha
-    selecionada **na hora**, sem duração nem revert — ideal pra
-    conferir rapidamente se um endereço/valor está certo.
-  - **Testar presente (completo)**: roda o presente **inteiro**, exatamente
-    como aconteceria numa LIVE de verdade — aplica os alvos, espera a
-    duração (se o presente tiver uma) e reverte automaticamente ao
-    final. Funciona **com ou sem estar conectado ao TikTok**.
-  - Ao criar ou editar um presente, cada alvo também tem seu próprio
-    botão **"Testar"** dentro do formulário, então dá pra validar
-    se o parâmetro está certo *antes mesmo* de salvar.
+  - **Testar (Aplicar)**: aplica **todos os itens** do presente
+    selecionado agora, só para conferir — não entra na fila, não conta
+    duração e não reverte pra roupa padrão depois. Serve só pra
+    verificar que todos os itens do presente aplicam certo, sem
+    interferir na fila nem no estado normal do sistema.
+  - **Testar (Completo)**: roda o presente **inteiro**, exatamente
+    como aconteceria numa LIVE de verdade — aplica os alvos, entra na
+    fila se tiver duração, espera, e reverte automaticamente ao final.
+    Funciona **com ou sem estar conectado ao TikTok**.
+  - No formulário de **criar/editar** um presente é onde você vê cada
+    item individualmente (a lista de alvos), com um botão **"Testar"**
+    próprio em cada um, pra validar peça por peça antes mesmo de salvar.
 - **Aba "Conjuntos de roupa"**: a lista de conjuntos (`outfits:`), com
   uma coluna **"Padrão?"** marcando com ★ qual é a roupa padrão atual.
   - **Novo conjunto** / **Editar conjunto** / **Remover conjunto**
@@ -131,7 +136,7 @@ Fluxo recomendado: primeiro monte seus **conjuntos de roupa** (aba
 defina um deles como padrão com "★ Definir como roupa padrão"). Depois
 vá pra aba **"Presentes"** → "Novo presente" → escolha um conjunto
 pronto e/ou alvos extras → salve → selecione o presente e clique em
-**Testar presente (completo)** pra conferir o ciclo inteiro (inclusive
+**Testar (Completo)** pra conferir o ciclo inteiro (inclusive
 duração/revert) — tudo isso sem precisar estar numa LIVE. Só depois de
 conferir que está tudo certo, clique em
 **Salvar configuração**.
@@ -421,6 +426,36 @@ Como funciona:
 > o VRChat nunca gerou esse arquivo ainda, a tela avisa e você pode
 > continuar digitando os parâmetros manualmente normalmente.
 
+### Descobrir o "significado" de cada valor (modo escuta)
+
+O arquivo que o VRChat gera diz o **nome**, o **endereço** e o **tipo**
+de cada parâmetro — mas não diz o que cada *valor* representa
+visualmente. É comum um avatar ter, por exemplo, um único parâmetro
+`OUTFIT` (Int) que troca entre "Casual", "Formal", "Jeans", "Maid" etc.
+dependendo do número (`0`, `1`, `2`, `3`...) — esses nomes só existem
+dentro do menu de expressões do VRChat, montado no projeto Unity de
+quem criou o avatar; não tem como descobrir isso só lendo o arquivo.
+
+Pra descobrir isso na prática, use **"Descobrir valores ao vivo..."**
+(sempre visível, junto dos outros botões de ação):
+
+1. Clique em **"Iniciar escuta"** (porta padrão: **9001** — é a porta
+   que o próprio VRChat usa para *enviar* dados pra fora; diferente da
+   9000, que é onde ele *recebe* comandos).
+2. No VRChat, abra o menu de expressões e clique nas opções que você
+   quer identificar (ex: troque o "Outfit" para "Maid").
+3. O valor exato que o jogo mandou aparece na tela na hora — uma linha
+   por parâmetro, sempre mostrando o **valor mais recente** (não uma
+   lista que cresce sem parar, então parâmetros barulhentos como
+   `Viseme` ou de movimento não enchem a tela).
+4. Tem um filtro também, e um botão **"Usar como alvo..."** que abre
+   um alvo já preenchido com o endereço, tipo e valor exatos que
+   acabaram de chegar — pronto pra usar num presente ou conjunto.
+
+> Isso é a mesma ideia da "segunda parte" que ferramentas como o
+> Interfuse mostram: parâmetros com múltiplas opções escondidas atrás
+> de um número, que só dá pra identificar vendo o valor mudar ao vivo.
+
 > ⚠️ Se você fechar o programa inteiro enquanto um presente com duração
 > ainda está ativo, o revert automático daquele presente não roda (o
 > processo é encerrado antes do tempo acabar). Clicar em **Desconectar**
@@ -494,6 +529,7 @@ tiktok-vrchat/
 │   └── catalog.py              # Lista de nomes de presente (LIVE + sugestões)
 ├── vrchat/
 │   ├── osc.py                   # Cliente OSC para o VRChat
+│   ├── osc_listener.py           # "Modo escuta": recebe o que o VRChat manda pra fora
 │   └── discovery.py              # Lê os parâmetros do avatar gravados pelo VRChat
 ├── handlers/
 │   ├── gifts.py               # Presente -> ação OSC (via config.yaml)

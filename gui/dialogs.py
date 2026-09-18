@@ -122,11 +122,25 @@ class TargetEditDialog(tk.Toplevel):
         else:
             self.name_label.configure(text="Nome do parametro (ex: Outfit):")
 
-    def set_parameter(self, name: str, osc_type: str) -> None:
-        """Preenche o formulario a partir de um parametro descoberto do avatar."""
-        self.mode_var.set("parameter")
-        self.name_var.set(name)
+    def set_parameter(self, name: str, osc_type: str, value=None, address: str | None = None) -> None:
+        """
+        Preenche o formulario a partir de um parametro descoberto do
+        avatar. Se `address` for dado (o endereço OSC exato, como veio
+        do arquivo do VRChat ou do modo escuta), usa ele diretamente em
+        modo "endereço completo" -- pra evitar reconstruir errado um
+        endereço que não seja exatamente "/avatar/parameters/<nome>"
+        (alguns parâmetros têm nome de exibição com espaço, mas
+        endereço real com underline, por exemplo).
+        """
+        if address:
+            self.mode_var.set("address")
+            self.name_var.set(address)
+        else:
+            self.mode_var.set("parameter")
+            self.name_var.set(name)
         self.type_var.set(osc_type)
+        if value is not None:
+            self.value_var.set(str(value))
         self._update_labels()
 
     def _open_avatar_parameters(self):
@@ -1087,4 +1101,204 @@ class AvatarParametersDialog(tk.Toplevel):
             ):
                 return
         if self.on_use_parameter is not None:
-            self.on_use_parameter(p.name, p.loader_type)
+            self.on_use_parameter(p.name, p.loader_type, address=p.address)
+
+
+class LiveParametersDialog(tk.Toplevel):
+    """
+    "Modo escuta": mostra em tempo real os parâmetros que o PRÓPRIO
+    VRChat manda pra fora quando algo muda no avatar (troca de roupa
+    pelo menu de expressões, gestos, etc). Serve pra descobrir qual
+    número corresponde a qual opção visual, sem precisar adivinhar --
+    isso não existe em nenhum arquivo, só é possível ver "ao vivo".
+
+    Mostra uma linha por endereço (o valor mais recente + quantas vezes
+    mudou), não um log crescendo infinito -- assim parâmetros ruidosos
+    (Viseme, GestureLeft, velocidade...) não enchem a tela.
+    """
+
+    def __init__(self, parent, async_loop, on_use_parameter=None):
+        super().__init__(parent)
+        self.title("Descobrir valores ao vivo (modo escuta)")
+        self.geometry("620x460")
+        self.transient(parent)
+
+        self.async_loop = async_loop
+        self.on_use_parameter = on_use_parameter
+        self.listener = None
+        self.rows: dict[str, tuple[object, int]] = {}  # address -> (last_value, count)
+        self._visible_addresses: list[str] = []
+
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frm,
+            text="Inicie a escuta, depois troque de roupa/acessório pelo menu de\n"
+                 "expressões do VRChat (ou faça gestos) -- o valor exato que o jogo\n"
+                 "manda pra fora aparece aqui na hora.",
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        top = ttk.Frame(frm)
+        top.pack(fill="x")
+        ttk.Label(top, text="Porta de escuta:").pack(side="left")
+        self.port_var = tk.StringVar(value="9001")
+        ttk.Entry(top, textvariable=self.port_var, width=8).pack(side="left", padx=(4, 10))
+        self.start_btn = ttk.Button(top, text="Iniciar escuta", command=self._on_start)
+        self.start_btn.pack(side="left", padx=2)
+        self.stop_btn = ttk.Button(
+            top, text="Parar escuta", command=self._on_stop, state="disabled"
+        )
+        self.stop_btn.pack(side="left", padx=2)
+        ttk.Button(top, text="Limpar lista", command=self._on_clear).pack(side="left", padx=(10, 2))
+
+        self.status_label = ttk.Label(frm, text="Parado.", foreground="#888888")
+        self.status_label.pack(anchor="w", pady=(4, 6))
+
+        filter_frame = ttk.Frame(frm)
+        filter_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(filter_frame, text="Filtrar:").pack(side="left")
+        self.filter_var = tk.StringVar()
+        self.filter_var.trace_add("write", lambda *_a: self._refresh_tree())
+        ttk.Entry(filter_frame, textvariable=self.filter_var).pack(
+            side="left", fill="x", expand=True, padx=(6, 0)
+        )
+
+        columns = ("endereco", "valor", "vezes")
+        self.tree = ttk.Treeview(frm, columns=columns, show="headings")
+        self.tree.heading("endereco", text="Endereço")
+        self.tree.heading("valor", text="Último valor")
+        self.tree.heading("vezes", text="Vezes visto")
+        self.tree.column("endereco", width=300)
+        self.tree.column("valor", width=140, anchor="center")
+        self.tree.column("vezes", width=90, anchor="center")
+        self.tree.pack(fill="both", expand=True)
+
+        scroll = ttk.Scrollbar(frm, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Copiar endereço", command=self._copy_address).pack(
+            side="left", padx=2
+        )
+        if self.on_use_parameter is not None:
+            ttk.Button(
+                btns, text="Usar como alvo...", command=self._use_selected
+            ).pack(side="left", padx=(12, 2))
+        ttk.Button(btns, text="Fechar", command=self._on_close).pack(side="right", padx=2)
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_start(self) -> None:
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.", parent=self)
+            return
+        try:
+            port = int(self.port_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Porta inválida", "A porta precisa ser um número.", parent=self)
+            return
+
+        from vrchat.osc_listener import VRChatOscListener
+
+        listener = VRChatOscListener(on_message=self._on_message_any_thread, port=port)
+
+        async def _run():
+            await listener.start()
+
+        import asyncio
+
+        future = asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+        try:
+            future.result(timeout=3)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Não foi possível escutar nessa porta",
+                f"{exc}\n\nSe já tiver outro programa escutando na mesma porta "
+                f"(ex: o próprio config.yaml usando a mesma porta pra outra coisa), "
+                f"tente uma porta diferente.",
+                parent=self,
+            )
+            return
+
+        self.listener = listener
+        self.status_label.configure(
+            text=f"Escutando na porta {port}. Troque algo no VRChat agora.",
+            foreground="#1a8a1a",
+        )
+        self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+
+    def _on_message_any_thread(self, address: str, args: tuple) -> None:
+        value = args[0] if args else None
+        self.after(0, lambda: self._record(address, value))
+
+    def _record(self, address: str, value) -> None:
+        _, count = self.rows.get(address, (None, 0))
+        self.rows[address] = (value, count + 1)
+        self._refresh_tree()
+
+    def _refresh_tree(self) -> None:
+        term = self.filter_var.get().strip().lower()
+        self.tree.delete(*self.tree.get_children())
+        self._visible_addresses = []
+        for address, (value, count) in sorted(self.rows.items()):
+            if term and term not in address.lower():
+                continue
+            self._visible_addresses.append(address)
+            self.tree.insert("", "end", iid=address, values=(address, repr(value), count))
+
+    def _on_clear(self) -> None:
+        self.rows.clear()
+        self._refresh_tree()
+
+    def _on_stop(self) -> None:
+        if self.listener is not None and self.async_loop is not None:
+            listener = self.listener
+
+            async def _run():
+                await listener.stop()
+
+            import asyncio
+
+            asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+            self.listener = None
+        self.status_label.configure(text="Parado.", foreground="#888888")
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
+
+    def _on_close(self) -> None:
+        self._on_stop()
+        self.destroy()
+
+    def _selected_address(self):
+        sel = self.tree.selection()
+        return sel[0] if sel else None
+
+    def _copy_address(self) -> None:
+        address = self._selected_address()
+        if address is None:
+            messagebox.showinfo("Nada selecionado", "Selecione uma linha na lista.", parent=self)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(address)
+
+    def _use_selected(self) -> None:
+        address = self._selected_address()
+        if address is None:
+            messagebox.showinfo("Nada selecionado", "Selecione uma linha na lista.", parent=self)
+            return
+        value, _count = self.rows[address]
+        name = address.rsplit("/", 1)[-1]
+        if isinstance(value, bool):
+            osc_type = "bool"
+        elif isinstance(value, int):
+            osc_type = "int"
+        elif isinstance(value, float):
+            osc_type = "float"
+        else:
+            osc_type = "string"
+        if self.on_use_parameter is not None:
+            self.on_use_parameter(name, osc_type, value, address)

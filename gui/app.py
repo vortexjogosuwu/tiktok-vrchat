@@ -24,7 +24,7 @@ from tkinter import messagebox, ttk
 from typing import Any, Optional
 
 from config.loader import AppConfig, ConfigError, load_config, load_raw, parse_gift_rule, save_raw
-from gui.dialogs import AvatarParametersDialog, GiftEditDialog, OutfitEditDialog, TargetEditDialog
+from gui.dialogs import AvatarParametersDialog, GiftEditDialog, LiveParametersDialog, OutfitEditDialog, TargetEditDialog
 from handlers.gifts import GiftHandler
 from tiktok.listener import TikTokGiftListener
 import utils_log
@@ -138,6 +138,9 @@ class App(tk.Tk):
             actions_frame, text="Parâmetros do avatar...", command=self._on_show_avatar_parameters
         ).pack(side="left", padx=(16, 2))
         ttk.Button(
+            actions_frame, text="Descobrir valores ao vivo...", command=self._on_show_live_parameters
+        ).pack(side="left", padx=2)
+        ttk.Button(
             actions_frame, text="Salvar configuração", command=self._on_save_config
         ).pack(side="right", padx=2)
 
@@ -171,21 +174,18 @@ class App(tk.Tk):
         list_frame = ttk.LabelFrame(parent, text="Presentes configurados", padding=8)
         list_frame.pack(fill="both", expand=True, padx=6, pady=(6, 4))
 
-        columns = ("presente", "conjunto", "endereco", "tipo", "valor", "duracao")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        columns = ("presente", "conjunto", "duracao", "alvos")
+        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("presente", text="Presente")
         self.tree.heading("conjunto", text="Conjunto")
-        self.tree.heading("endereco", text="Endereco OSC")
-        self.tree.heading("tipo", text="Tipo")
-        self.tree.heading("valor", text="Valor")
         self.tree.heading("duracao", text="Duração")
-        self.tree.column("presente", width=110)
-        self.tree.column("conjunto", width=90, anchor="center")
-        self.tree.column("endereco", width=230)
-        self.tree.column("tipo", width=55, anchor="center")
-        self.tree.column("valor", width=70, anchor="center")
+        self.tree.heading("alvos", text="Itens")
+        self.tree.column("presente", width=140)
+        self.tree.column("conjunto", width=100, anchor="center")
         self.tree.column("duracao", width=80, anchor="center")
+        self.tree.column("alvos", width=340)
         self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.bind("<Double-1>", lambda _e: self._on_edit_gift())
 
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -203,10 +203,10 @@ class App(tk.Tk):
             side="left", padx=2
         )
         ttk.Button(
-            btns_frame, text="Testar selecionado(s)", command=self._on_test_selected
+            btns_frame, text="Testar (Completo)", command=self._on_test_gift_full
         ).pack(side="left", padx=(12, 2))
         ttk.Button(
-            btns_frame, text="Testar presente (completo)", command=self._on_test_gift_full
+            btns_frame, text="Testar (Aplicar)", command=self._on_test_gift_apply_only
         ).pack(side="left", padx=2)
 
     def _build_outfits_tab(self, parent: ttk.Frame) -> None:
@@ -295,15 +295,14 @@ class App(tk.Tk):
                 duration_label = (
                     f"{int(minutes)} min" if minutes == int(minutes) else f"{minutes:.1f} min"
                 )
-            for idx, target in enumerate(rule.targets):
-                iid = f"{gift_name}#{idx}"
-                self.tree.insert(
-                    "", "end", iid=iid,
-                    values=(
-                        gift_name, rule.outfit_name or "-", target.address,
-                        target.value_type, target.value, duration_label,
-                    ),
-                )
+            targets_summary = ", ".join(
+                f"{t.address.rsplit('/', 1)[-1]}={t.value!r}" for t in rule.targets
+            )
+            alvos_label = f"({len(rule.targets)}) {targets_summary}" if rule.targets else "(0)"
+            self.tree.insert(
+                "", "end", iid=gift_name,
+                values=(gift_name, rule.outfit_name or "-", duration_label, alvos_label),
+            )
 
     def _refresh_outfits_tree(self) -> None:
         self.outfits_tree.delete(*self.outfits_tree.get_children())
@@ -412,20 +411,36 @@ class App(tk.Tk):
             assert self.osc_client is not None
             self.osc_client.send(target.address, target.value)
 
-    def _on_test_selected(self) -> None:
-        self._ensure_osc_client()
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showinfo("Nada selecionado", "Selecione um ou mais presentes na lista.")
+    def _on_test_gift_apply_only(self) -> None:
+        """
+        Testar (Aplicar): aplica TODOS os itens do presente selecionado
+        agora, só para teste -- NÃO entra na fila, NÃO conta duração e
+        NÃO reverte para a roupa padrão depois. Serve só pra conferir
+        se todos os itens do presente aplicam corretamente, sem afetar
+        a fila nem o estado normal do sistema.
+        """
+        gift_name = self._selected_gift_name()
+        if gift_name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+            return
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
             return
 
-        for iid in selection:
-            gift_name, idx_str = iid.split("#")
-            idx = int(idx_str)
-            rule = self.app_config.gifts[gift_name]  # type: ignore[union-attr]
-            target = rule.targets[idx]
-            assert self.osc_client is not None
-            self.osc_client.send(target.address, target.value)
+        self._ensure_osc_client()
+        assert self.app_config is not None
+        rule = self.app_config.gifts.get(gift_name)
+        if rule is None:
+            return
+        osc_client = self.osc_client
+
+        async def _run() -> None:
+            utils_log.log_tiktok(
+                f"Testando '{gift_name}' (aplicar apenas -- sem fila, sem revert)..."
+            )
+            await send_target_sequence(osc_client, rule.targets)
+
+        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 
     # ------------------------------------------------------------------ #
     # CRUD de presentes (editando self.raw_config["gifts"])
@@ -530,7 +545,7 @@ class App(tk.Tk):
         selection = self.tree.selection()
         if not selection:
             return None
-        return selection[0].split("#")[0]
+        return selection[0]
 
     # ------------------------------------------------------------------ #
     # CRUD de conjuntos de roupa (editando self.raw_config["outfits"])
@@ -668,12 +683,17 @@ class App(tk.Tk):
     def _on_show_avatar_parameters(self) -> None:
         AvatarParametersDialog(self, on_use_parameter=self._on_use_avatar_parameter)
 
-    def _on_use_avatar_parameter(self, name: str, loader_type: str) -> None:
+    def _on_use_avatar_parameter(
+        self, name: str, loader_type: str, value=None, address: str | None = None
+    ) -> None:
         """Chamado quando o usuário escolhe 'Usar este parâmetro...' na lista
         de parâmetros do avatar — abre um alvo já pré-preenchido para ele
-        só completar o valor e testar/adicionar num presente ou conjunto."""
+        só completar o valor e testar/adicionar num presente ou conjunto.
+        Usa sempre o endereço OSC exato (quando disponível), em vez de
+        reconstruir a partir do nome -- alguns parâmetros têm nome de
+        exibição diferente do endereço real (ex: espaço vs underline)."""
         dlg = TargetEditDialog(self, on_test=self._test_raw_target)
-        dlg.set_parameter(name, loader_type)
+        dlg.set_parameter(name, loader_type, value=value, address=address)
         messagebox.showinfo(
             "Parâmetro pronto",
             f"Preenchi o parâmetro '{name}' (tipo detectado: {loader_type}).\n"
@@ -681,6 +701,11 @@ class App(tk.Tk):
             f"depois 'OK'. Você pode então copiar esse alvo manualmente para um "
             f"presente ou conjunto (ou usar como referência).",
             parent=self,
+        )
+
+    def _on_show_live_parameters(self) -> None:
+        LiveParametersDialog(
+            self, async_loop=self.async_loop, on_use_parameter=self._on_use_avatar_parameter
         )
 
     def _reload_app_config_from_raw(self) -> None:
