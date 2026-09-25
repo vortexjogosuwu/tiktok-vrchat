@@ -1,3 +1,10 @@
+# First (Primeiro)
+
+If you copy or Fork this project, please give credit. (Thank you).
+
+Se você copiar ou Fork este projeto, por favor, dê os devidos créditos. (Obrigado).
+
+
 # TikTok LIVE → VRChat OSC Bridge
 
 Conecta eventos de presente da sua LIVE do TikTok (**@vortexjogosuwu**) diretamente
