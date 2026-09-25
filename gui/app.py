@@ -24,7 +24,7 @@ from tkinter import messagebox, ttk
 from typing import Any, Optional
 
 from config.loader import AppConfig, ConfigError, load_config, load_raw, parse_gift_rule, save_raw
-from gui.dialogs import AvatarParametersDialog, GiftEditDialog, LiveParametersDialog, OutfitEditDialog, TargetEditDialog
+from gui.dialogs import AvatarParametersDialog, GiftEditDialog, LiveParametersDialog, OutfitEditDialog, QueueStatusDialog, TargetEditDialog
 from handlers.gifts import GiftHandler
 from tiktok.listener import TikTokGiftListener
 import utils_log
@@ -128,6 +128,12 @@ class App(tk.Tk):
         ttk.Button(
             actions_frame, text="Voltar para roupa padrão", command=self._on_revert_to_default,
         ).pack(side="left", padx=2)
+        ttk.Button(
+            actions_frame, text="Ver fila...", command=self._on_show_queue
+        ).pack(side="left", padx=(8, 2))
+        ttk.Button(
+            actions_frame, text="Limpar fila", command=self._on_clear_queue
+        ).pack(side="left", padx=2)
         panic_btn = tk.Button(
             actions_frame, text="🚨 PÂNICO", command=self._on_panic,
             background="#c22", foreground="white", activebackground="#a11",
@@ -150,7 +156,7 @@ class App(tk.Tk):
 
         gifts_tab = ttk.Frame(notebook)
         outfits_tab = ttk.Frame(notebook)
-        notebook.add(gifts_tab, text="Presentes")
+        notebook.add(gifts_tab, text="Recompensas")
         notebook.add(outfits_tab, text="Conjuntos de roupa")
 
         self._build_gifts_tab(gifts_tab)
@@ -171,19 +177,25 @@ class App(tk.Tk):
         self.log_text.tag_configure("ERROR", foreground="#c22")
 
     def _build_gifts_tab(self, parent: ttk.Frame) -> None:
-        list_frame = ttk.LabelFrame(parent, text="Presentes configurados", padding=8)
+        list_frame = ttk.LabelFrame(parent, text="Recompensas configuradas", padding=8)
         list_frame.pack(fill="both", expand=True, padx=6, pady=(6, 4))
 
-        columns = ("presente", "conjunto", "duracao", "alvos")
+        columns = ("recompensa", "presentes", "ativo", "conjunto", "fila", "duracao", "alvos")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
-        self.tree.heading("presente", text="Presente")
+        self.tree.heading("recompensa", text="Recompensa")
+        self.tree.heading("presentes", text="Presentes")
+        self.tree.heading("ativo", text="Ativo?")
         self.tree.heading("conjunto", text="Conjunto")
+        self.tree.heading("fila", text="Fila")
         self.tree.heading("duracao", text="Duração")
         self.tree.heading("alvos", text="Itens")
-        self.tree.column("presente", width=140)
-        self.tree.column("conjunto", width=100, anchor="center")
-        self.tree.column("duracao", width=80, anchor="center")
-        self.tree.column("alvos", width=340)
+        self.tree.column("recompensa", width=110)
+        self.tree.column("presentes", width=130)
+        self.tree.column("ativo", width=55, anchor="center")
+        self.tree.column("conjunto", width=85, anchor="center")
+        self.tree.column("fila", width=65, anchor="center")
+        self.tree.column("duracao", width=70, anchor="center")
+        self.tree.column("alvos", width=220)
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _e: self._on_edit_gift())
 
@@ -193,15 +205,18 @@ class App(tk.Tk):
 
         btns_frame = ttk.Frame(parent, padding=(6, 0))
         btns_frame.pack(fill="x")
-        ttk.Button(btns_frame, text="Novo presente", command=self._on_new_gift).pack(
+        ttk.Button(btns_frame, text="Nova recompensa", command=self._on_new_gift).pack(
             side="left", padx=2
         )
-        ttk.Button(btns_frame, text="Editar presente", command=self._on_edit_gift).pack(
+        ttk.Button(btns_frame, text="Editar recompensa", command=self._on_edit_gift).pack(
             side="left", padx=2
         )
-        ttk.Button(btns_frame, text="Remover presente", command=self._on_remove_gift).pack(
+        ttk.Button(btns_frame, text="Remover recompensa", command=self._on_remove_gift).pack(
             side="left", padx=2
         )
+        ttk.Button(
+            btns_frame, text="Ativar/Desativar", command=self._on_toggle_gift_enabled
+        ).pack(side="left", padx=(12, 2))
         ttk.Button(
             btns_frame, text="Testar (Completo)", command=self._on_test_gift_full
         ).pack(side="left", padx=(12, 2))
@@ -285,26 +300,46 @@ class App(tk.Tk):
         self._refresh_outfits_tree()
 
     def _refresh_gifts_tree(self) -> None:
+        previously_selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         if not self.app_config:
             return
         for gift_name, rule in self.app_config.gifts.items():
             duration_label = "-"
             if rule.duration_seconds is not None:
-                minutes = rule.duration_seconds / 60
-                duration_label = (
-                    f"{int(minutes)} min" if minutes == int(minutes) else f"{minutes:.1f} min"
-                )
+                if rule.duration_seconds < 60:
+                    seconds = rule.duration_seconds
+                    duration_label = (
+                        f"{int(seconds)}s" if seconds == int(seconds) else f"{seconds:.1f}s"
+                    )
+                else:
+                    minutes = rule.duration_seconds / 60
+                    duration_label = (
+                        f"{int(minutes)} min" if minutes == int(minutes) else f"{minutes:.1f} min"
+                    )
             targets_summary = ", ".join(
                 f"{t.address.rsplit('/', 1)[-1]}={t.value!r}" for t in rule.targets
             )
             alvos_label = f"({len(rule.targets)}) {targets_summary}" if rule.targets else "(0)"
+            fila_label = "ignora" if (rule.duration_seconds is not None and rule.ignore_queue) else "-"
+            presentes_label = ", ".join(rule.trigger_gift_names)
             self.tree.insert(
                 "", "end", iid=gift_name,
-                values=(gift_name, rule.outfit_name or "-", duration_label, alvos_label),
+                values=(
+                    gift_name, presentes_label, "Sim" if rule.enabled else "Não",
+                    rule.outfit_name or "-", fila_label, duration_label, alvos_label,
+                ),
+                tags=() if rule.enabled else ("disabled",),
             )
+        self.tree.tag_configure("disabled", foreground="#999999")
+        # Restaura a seleção anterior, se o presente ainda existir (ex:
+        # depois de ativar/desativar), pra não perder o que estava marcado.
+        still_present = [iid for iid in previously_selected if self.tree.exists(iid)]
+        if still_present:
+            self.tree.selection_set(still_present)
 
     def _refresh_outfits_tree(self) -> None:
+        previously_selected = self.outfits_tree.selection()
         self.outfits_tree.delete(*self.outfits_tree.get_children())
         default_name = self.app_config.default_revert_outfit_name if self.app_config else None
         for name, items in self._current_outfits_raw().items():
@@ -315,6 +350,9 @@ class App(tk.Tk):
                 "", "end", iid=name,
                 values=("★" if name == default_name else "", name, pieces),
             )
+        still_present = [iid for iid in previously_selected if self.outfits_tree.exists(iid)]
+        if still_present:
+            self.outfits_tree.selection_set(still_present)
 
     # ------------------------------------------------------------------ #
     # OSC (teste manual, independente do TikTok estar conectado)
@@ -348,14 +386,17 @@ class App(tk.Tk):
 
     def _on_test_gift_full(self) -> None:
         """
-        Testa o presente inteiro como se tivesse chegado de verdade pela
-        LIVE: aplica os alvos, espera a duração (se houver) e reverte --
-        tudo isso funciona COM ou SEM estar conectado ao TikTok, porque
-        roda no mesmo loop assíncrono permanente do programa.
+        Testa a recompensa inteira como se um presente tivesse chegado
+        de verdade pela LIVE: aplica os alvos, espera a duração (se
+        houver) e reverte -- tudo isso funciona COM ou SEM estar
+        conectado ao TikTok, porque roda no mesmo loop assíncrono
+        permanente do programa. Testa pelo NOME DA RECOMPENSA
+        diretamente (não pelo nome de um presente-gatilho), já que os
+        dois podem ser diferentes.
         """
-        gift_name = self._selected_gift_name()
-        if gift_name is None:
-            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+        reward_name = self._selected_gift_name()
+        if reward_name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione uma recompensa na lista.")
             return
         if self.async_loop is None:
             messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
@@ -364,7 +405,7 @@ class App(tk.Tk):
         gift_handler = self._ensure_gift_handler()
 
         async def _run() -> None:
-            await gift_handler.handle_gift(gift_name, "Teste manual", 1)
+            await gift_handler.test_reward(reward_name, "Teste manual", 1)
 
         asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 
@@ -382,13 +423,13 @@ class App(tk.Tk):
         asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
 
     def _on_panic(self) -> None:
-        """PÂNICO: pede confirmação, limpa a fila inteira e volta pra
-        roupa padrão imediatamente."""
+        """PÂNICO: pede confirmação, limpa a fila inteira (e os presentes
+        paralelos ativos) e volta pra roupa padrão imediatamente."""
         if not messagebox.askyesno(
             "Limpar fila de presentes?",
             "Isso vai cancelar TODOS os presentes com duração que estejam "
-            "ativos ou esperando na fila, e trocar para a roupa padrão "
-            "imediatamente.\n\nContinuar?",
+            "ativos ou esperando na fila (inclusive os que rodam em paralelo), "
+            "e trocar para a roupa padrão imediatamente.\n\nContinuar?",
         ):
             return
         if self.async_loop is None:
@@ -396,10 +437,68 @@ class App(tk.Tk):
             return
         gift_handler = self._ensure_gift_handler()
 
-        async def _run() -> None:
-            await gift_handler.panic()
+        async def _run():
+            return await gift_handler.panic()
 
-        asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+        future = asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+        def _report():
+            try:
+                queue_cleared, independent_cleared = future.result(timeout=5)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Erro no pânico", str(exc))
+                return
+            total = queue_cleared + independent_cleared
+            messagebox.showinfo(
+                "Pânico concluído",
+                f"{total} recompensa(s) cancelada(s) "
+                f"({queue_cleared} da fila, {independent_cleared} em paralelo).\n"
+                f"Roupa padrão aplicada.",
+            )
+
+        self.after(100, _report)
+
+    def _on_show_queue(self) -> None:
+        gift_handler = self._ensure_gift_handler()
+
+        def get_status():
+            return gift_handler.timed_queue.current_snapshot(), gift_handler.timed_queue.pending_snapshot()
+
+        def on_clear():
+            self._clear_queue_and_report(show_dialog_after=True)
+
+        QueueStatusDialog(self, get_status=get_status, on_clear=on_clear)
+
+    def _on_clear_queue(self) -> None:
+        if not messagebox.askyesno(
+            "Limpar fila?",
+            "Isso cancela a recompensa ativa e todas as que estão esperando na "
+            "fila (sem reverter pra roupa padrão automaticamente — se quiser "
+            "isso também, use o botão PÂNICO).\n\nContinuar?",
+        ):
+            return
+        self._clear_queue_and_report(show_dialog_after=False)
+
+    def _clear_queue_and_report(self, show_dialog_after: bool) -> None:
+        if self.async_loop is None:
+            messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
+            return
+        gift_handler = self._ensure_gift_handler()
+
+        async def _run():
+            return await gift_handler.timed_queue.panic_clear()
+
+        future = asyncio.run_coroutine_threadsafe(_run(), self.async_loop)
+
+        def _report():
+            try:
+                cleared = future.result(timeout=5)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Erro ao limpar a fila", str(exc))
+                return
+            messagebox.showinfo("Fila limpa", f"{cleared} recompensa(s) removida(s) da fila.")
+
+        self.after(100, _report)
 
     def _test_raw_target(self, raw_target: dict[str, Any]) -> None:
         """Valida e envia um alvo isolado (usado pelos dialogos de edicao)."""
@@ -421,7 +520,7 @@ class App(tk.Tk):
         """
         gift_name = self._selected_gift_name()
         if gift_name is None:
-            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+            messagebox.showinfo("Nada selecionado", "Selecione uma recompensa na lista.")
             return
         if self.async_loop is None:
             messagebox.showerror("Erro interno", "O loop assíncrono não está pronto ainda.")
@@ -453,7 +552,7 @@ class App(tk.Tk):
 
     @staticmethod
     def _build_raw_gift(result: dict[str, Any]) -> dict[str, Any]:
-        raw_gift: dict[str, Any] = {}
+        raw_gift: dict[str, Any] = {"gift_names": result["gift_names"]}
         if result["outfit"]:
             raw_gift["outfit"] = result["outfit"]
         extra_targets = result["extra_targets"]
@@ -461,8 +560,15 @@ class App(tk.Tk):
             raw_gift["parameters"] = extra_targets
         elif len(extra_targets) == 1:
             raw_gift.update(extra_targets[0])
-        if result["duration_minutes"] is not None:
-            raw_gift["duration_minutes"] = result["duration_minutes"]
+        if not result.get("enabled", True):
+            raw_gift["enabled"] = False
+        if result["duration_value"] is not None:
+            if result["duration_unit"] == "segundos":
+                raw_gift["duration_seconds"] = result["duration_value"]
+            else:
+                raw_gift["duration_minutes"] = result["duration_value"]
+            if result.get("ignore_queue"):
+                raw_gift["ignore_queue"] = True
         if result["revert_outfit"]:
             raw_gift["revert_outfit"] = result["revert_outfit"]
         if result["revert_extra_targets"]:
@@ -486,32 +592,52 @@ class App(tk.Tk):
     def _on_edit_gift(self) -> None:
         gift_name = self._selected_gift_name()
         if gift_name is None:
-            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+            messagebox.showinfo("Nada selecionado", "Selecione uma recompensa na lista.")
             return
 
         raw_gift = (self.raw_config.get("gifts") or {}).get(gift_name, {})
         outfit_name = raw_gift.get("outfit")
+        excluded_keys = (
+            "duration_minutes", "duration_seconds", "revert", "revert_outfit",
+            "outfit", "enabled", "ignore_queue", "gift_names",
+        )
         if raw_gift.get("parameters"):
             extra_targets = raw_gift["parameters"]
         elif "parameter" in raw_gift or "address" in raw_gift:
             extra_targets = [
-                {k: v for k, v in raw_gift.items()
-                 if k not in ("duration_minutes", "duration_seconds", "revert", "revert_outfit", "outfit")}
+                {k: v for k, v in raw_gift.items() if k not in excluded_keys}
             ]
         else:
             extra_targets = []
 
-        duration_minutes = raw_gift.get("duration_minutes")
-        if duration_minutes is None and raw_gift.get("duration_seconds") is not None:
-            duration_minutes = float(raw_gift["duration_seconds"]) / 60.0
+        # Retrocompatível: se não houver 'gift_names' explícito, o
+        # próprio nome da recompensa é o único presente-gatilho.
+        trigger_gift_names = raw_gift.get("gift_names") or [gift_name]
+
+        # Preserva a unidade original (minutos/segundos) que foi usada
+        # ao salvar, em vez de sempre converter para minutos -- assim
+        # editar um presente com "duration_seconds: 6" continua
+        # mostrando "6 segundos", não "0.1 minutos".
+        if raw_gift.get("duration_seconds") is not None:
+            duration_value = float(raw_gift["duration_seconds"])
+            duration_unit = "segundos"
+        elif raw_gift.get("duration_minutes") is not None:
+            duration_value = float(raw_gift["duration_minutes"])
+            duration_unit = "minutos"
+        else:
+            duration_value = None
+            duration_unit = "minutos"
 
         dlg = GiftEditDialog(
             self, on_test_target=self._test_raw_target,
             outfits_raw=self._current_outfits_raw(),
-            gift_name=gift_name, outfit_name=outfit_name, extra_targets=extra_targets,
-            duration_minutes=duration_minutes,
+            gift_name=gift_name, trigger_gift_names=trigger_gift_names,
+            outfit_name=outfit_name, extra_targets=extra_targets,
+            duration_value=duration_value, duration_unit=duration_unit,
             revert_outfit_name=raw_gift.get("revert_outfit"),
             revert_extra_targets=raw_gift.get("revert") or [],
+            enabled=raw_gift.get("enabled", True),
+            ignore_queue=raw_gift.get("ignore_queue", False),
             existing_names=self._current_gift_names(),
             editing_original_name=gift_name,
             username=self.username_var.get().strip(),
@@ -531,15 +657,35 @@ class App(tk.Tk):
     def _on_remove_gift(self) -> None:
         gift_name = self._selected_gift_name()
         if gift_name is None:
-            messagebox.showinfo("Nada selecionado", "Selecione um presente na lista.")
+            messagebox.showinfo("Nada selecionado", "Selecione uma recompensa na lista.")
             return
         if not messagebox.askyesno(
-            "Remover presente", f"Remover o presente '{gift_name}' da configuracao?"
+            "Remover recompensa", f"Remover a recompensa '{gift_name}' da configuracao?"
         ):
             return
         gifts = self.raw_config.get("gifts") or {}
         gifts.pop(gift_name, None)
         self._reload_app_config_from_raw()
+
+    def _on_toggle_gift_enabled(self) -> None:
+        gift_name = self._selected_gift_name()
+        if gift_name is None:
+            messagebox.showinfo("Nada selecionado", "Selecione uma recompensa na lista.")
+            return
+        gifts = self.raw_config.get("gifts") or {}
+        raw_gift = gifts.get(gift_name)
+        if raw_gift is None:
+            return
+        currently_enabled = raw_gift.get("enabled", True)
+        if currently_enabled:
+            raw_gift["enabled"] = False
+        else:
+            raw_gift.pop("enabled", None)
+        self._reload_app_config_from_raw()
+        utils_log.log_tiktok(
+            f"'{gift_name}' {'desativado' if currently_enabled else 'ativado'} "
+            f"(ainda não salvo em disco)."
+        )
 
     def _selected_gift_name(self) -> Optional[str]:
         selection = self.tree.selection()
@@ -748,17 +894,32 @@ class App(tk.Tk):
             for gift_name, rule in gifts.items():
                 if rule.duration_seconds is not None and not rule.revert_targets and not default_revert:
                     raise ConfigError(
-                        f"Presente '{gift_name}' tem duração configurada, mas não há "
-                        f"revert definido para ele nem uma roupa padrão global "
+                        f"Recompensa '{gift_name}' tem duração configurada, mas não há "
+                        f"revert definido para ela nem uma roupa padrão global "
                         f"configurada. Defina uma na aba 'Conjuntos de roupa' ou "
-                        f"escolha um 'reverter para' neste presente."
+                        f"escolha um 'reverter para' nesta recompensa."
                     )
+
+            # Cada presente REAL do TikTok só pode disparar UMA recompensa.
+            gift_name_lookup: dict[str, str] = {}
+            for reward_name, rule in gifts.items():
+                for trigger in rule.trigger_gift_names:
+                    existing = gift_name_lookup.get(trigger)
+                    if existing is not None and existing != reward_name:
+                        raise ConfigError(
+                            f"O presente '{trigger}' está associado a mais de uma "
+                            f"recompensa ('{existing}' e '{reward_name}'). Cada "
+                            f"presente do TikTok só pode disparar uma recompensa "
+                            f"— remova-o de uma delas."
+                        )
+                    gift_name_lookup[trigger] = reward_name
         except ConfigError as exc:
             messagebox.showerror("Configuracao invalida", str(exc))
             return
 
         if self.app_config is not None:
             self.app_config.gifts = gifts
+            self.app_config.gift_name_lookup = gift_name_lookup
             self.app_config.outfits = outfits_parsed
             self.app_config.default_revert = default_revert
             self.app_config.default_revert_outfit_name = default_revert_outfit_name

@@ -63,6 +63,12 @@ class OscTarget:
 @dataclass
 class GiftRule:
     gift_name: str
+    # Nomes REAIS de presentes do TikTok que disparam esta recompensa.
+    # Pode ter mais de um (ex: dois presentes com o "mesmo valor" caindo
+    # na mesma recompensa). No formato antigo/retrocompatível, onde a
+    # chave da recompensa em config.yaml já É o nome do presente, esta
+    # lista tem só esse nome.
+    trigger_gift_names: list[str] = field(default_factory=list)
     targets: list[OscTarget] = field(default_factory=list)
     # None = presente instantâneo, sem fila (dispara e pronto).
     # Um número = presente "exclusivo": entra na fila, fica ativo por
@@ -75,6 +81,13 @@ class GiftRule:
     # resolvidos estão em `targets`/`revert_targets` acima).
     outfit_name: str | None = None
     revert_outfit_name: str | None = None
+    # Se False, o presente é ignorado quando chega (sem apagar a config).
+    enabled: bool = True
+    # Só faz sentido com duração: se True, este presente NÃO entra na
+    # fila exclusiva — aplica e reverte em paralelo, sem esperar (nem
+    # bloquear) outros presentes com duração. Bom para ações rápidas
+    # tipo "boop no nariz" que não devem esperar uma troca de roupa.
+    ignore_queue: bool = False
 
     def effective_revert_targets(self, default_revert: list[OscTarget]) -> list[OscTarget]:
         return self.revert_targets or default_revert
@@ -89,6 +102,10 @@ class AppConfig:
     reconnect_max_delay: float
     reconnect_backoff_multiplier: float
     gifts: dict[str, GiftRule]
+    # Nome do presente do TikTok (ex: "Rose") -> nome da recompensa que
+    # ele dispara (chave em `gifts`). Construído a partir de
+    # `trigger_gift_names` de cada recompensa.
+    gift_name_lookup: dict[str, str] = field(default_factory=dict)
     outfits: dict[str, list[OscTarget]] = field(default_factory=dict)
     default_revert: list[OscTarget] = field(default_factory=list)
     default_revert_outfit_name: str | None = None
@@ -263,6 +280,38 @@ def _resolve_outfit_targets(
     return list(outfits[outfit_name])
 
 
+def _parse_trigger_gift_names(reward_name: str, raw: dict[str, Any]) -> list[str]:
+    """
+    Nomes REAIS de presentes do TikTok que disparam esta recompensa.
+
+    Se `gift_names` for definido, usa essa lista (permite vários
+    presentes reais apontando pra mesma recompensa). Caso contrário,
+    modo retrocompatível: a própria chave da recompensa em config.yaml
+    é tratada como o nome do presente.
+    """
+    raw_names = raw.get("gift_names")
+    if raw_names is None:
+        return [reward_name]
+
+    if not isinstance(raw_names, list) or not raw_names:
+        raise ConfigError(
+            f"Recompensa '{reward_name}': 'gift_names' precisa ser uma lista "
+            f"com pelo menos um nome de presente do TikTok (texto)."
+        )
+
+    names: list[str] = []
+    for item in raw_names:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(
+                f"Recompensa '{reward_name}': cada item de 'gift_names' precisa "
+                f"ser um nome de presente em texto (recebido: {item!r})."
+            )
+        name = item.strip()
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def _parse_gift_entry(
     gift_name: str,
     raw: dict[str, Any],
@@ -283,11 +332,13 @@ def _parse_gift_entry(
 
     if not targets:
         raise ConfigError(
-            f"Presente '{gift_name}' malformado: defina 'outfit' (conjunto "
+            f"Recompensa '{gift_name}' malformada: defina 'outfit' (conjunto "
             f"pré-criado em 'outfits'), 'parameter'/'address' (um alvo), ou "
             f"'parameters' (lista de alvos) — pode combinar 'outfit' com "
             f"alvos extras se quiser."
         )
+
+    trigger_gift_names = _parse_trigger_gift_names(gift_name, raw)
 
     duration_seconds = _parse_duration_seconds(gift_name, raw)
 
@@ -303,18 +354,21 @@ def _parse_gift_entry(
 
     if revert_targets and duration_seconds is None:
         warnings.append(
-            f"Presente '{gift_name}' define revert ('revert'/'revert_outfit') mas "
+            f"Recompensa '{gift_name}' define revert ('revert'/'revert_outfit') mas "
             f"não tem duração ('duration_minutes'/'duration_seconds') — o revert "
             f"nunca será usado."
         )
 
     return GiftRule(
         gift_name=gift_name,
+        trigger_gift_names=trigger_gift_names,
         targets=targets,
         duration_seconds=duration_seconds,
         revert_targets=revert_targets,
         outfit_name=outfit_name,
         revert_outfit_name=revert_outfit_name,
+        enabled=bool(raw.get("enabled", True)),
+        ignore_queue=bool(raw.get("ignore_queue", False)),
     )
 
 
@@ -395,12 +449,27 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     for gift_name, rule in gifts.items():
         if rule.duration_seconds is not None and not rule.revert_targets and not default_revert:
             raise ConfigError(
-                f"Presente '{gift_name}' tem duração configurada, mas não há "
-                f"revert definido para ele ('revert'/'revert_outfit') nem um "
+                f"Recompensa '{gift_name}' tem duração configurada, mas não há "
+                f"revert definido para ela ('revert'/'revert_outfit') nem um "
                 f"padrão global configurado ('vrchat.default_revert' ou "
                 f"'vrchat.default_revert_outfit'). Defina um dos dois para "
                 f"saber para onde o avatar deve voltar quando o tempo acabar."
             )
+
+    # Cada presente REAL do TikTok só pode disparar UMA recompensa. Monta
+    # o mapa reverso (presente -> recompensa) e detecta ambiguidades.
+    gift_name_lookup: dict[str, str] = {}
+    for reward_name, rule in gifts.items():
+        for trigger in rule.trigger_gift_names:
+            existing = gift_name_lookup.get(trigger)
+            if existing is not None and existing != reward_name:
+                raise ConfigError(
+                    f"O presente '{trigger}' está associado a mais de uma "
+                    f"recompensa ('{existing}' e '{reward_name}'). Cada presente "
+                    f"do TikTok só pode disparar uma recompensa — remova-o de "
+                    f"uma delas."
+                )
+            gift_name_lookup[trigger] = reward_name
 
     return AppConfig(
         tiktok_username=tiktok_username,
@@ -409,6 +478,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         reconnect_initial_delay=reconnect_initial_delay,
         reconnect_max_delay=reconnect_max_delay,
         reconnect_backoff_multiplier=reconnect_backoff_multiplier,
+        gift_name_lookup=gift_name_lookup,
         gifts=gifts,
         outfits=outfits,
         default_revert=default_revert,

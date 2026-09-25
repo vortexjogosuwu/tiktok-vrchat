@@ -3,23 +3,9 @@ tiktok:
 vrchat:
   osc_host: 127.0.0.1
   osc_port: 9000
-  default_revert_outfit: Padrao
 reconnect:
   initial_delay: 5
   max_delay: 60
   backoff_multiplier: 2
-outfits:
-  Padrao:
-  - parameter: OUTFIT
-    type: int
-    value: 1
-  - parameter: OUTFIT
-    type: int
-    value: 0
-gifts:
-  Rose:
-    type: int
-    value: 1
-    parameter: COAT
-    duration_minutes: 1.0
-    revert_outfit: Padrao
+outfits: {}
+gifts: {}
