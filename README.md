@@ -26,6 +26,15 @@ qualquer espectador da LIVE recebe.
 
 ## Instalação
 
+Duas formas de rodar, dependendo se você quer instalar Python ou não:
+
+- **Sem Python instalado** — gere o `.exe` você mesmo, num Windows,
+  rodando `build_exe.bat` (veja [`BUILD.md`](BUILD.md)). É a opção mais
+  simples pra distribuir pra outras pessoas usarem depois, já que o
+  `.exe` final não exige nada instalado na máquina delas.
+- **Com Python** — rodando o código-fonte direto (mais fácil de editar
+  e depurar):
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -43,20 +52,19 @@ sudo apt install python3-tk      # Debian/Ubuntu
 sudo dnf install python3-tkinter # Fedora
 ```
 
-## Uso — Windows (mais fácil: arquivos .bat)
+## Uso — Windows (mais fácil: arquivo .bat)
 
-Dois atalhos prontos, que criam e usam automaticamente um ambiente
-virtual Python local (pasta `.venv`, isolado do resto do seu sistema) e
-garantem as dependências do `requirements.txt` **em toda execução**
-(o `pip` pula rapidamente o que já está instalado, então isso não deixa
-o início mais lento, e evita erros do tipo "ModuleNotFoundError" se o
+Um atalho pronto, que cria e usa automaticamente um ambiente virtual
+Python local (pasta `.venv`, isolado do resto do seu sistema) e garante
+as dependências do `requirements.txt` **em toda execução** (o `pip`
+pula rapidamente o que já está instalado, então isso não deixa o
+início mais lento, e evita erros do tipo "ModuleNotFoundError" se o
 ambiente ficar incompleto por qualquer motivo):
 
 - **`iniciar_app.bat`** → abre a interface gráfica (equivalente a `python app.py`).
-- **`iniciar_main.bat`** → roda a versão em linha de comando (equivalente a `python main.py`).
 
-Basta dar dois cliques no `.bat` desejado. Na primeira execução, a criação
-do ambiente virtual e a instalação das dependências podem demorar um
+Basta dar dois cliques nele. Na primeira execução, a criação do
+ambiente virtual e a instalação das dependências podem demorar um
 pouco — nas próximas vezes é praticamente instantâneo.
 
 > Se você já tinha uma pasta `venv` (sem o ponto) de uma versão anterior
@@ -69,7 +77,7 @@ Isso exige que o Python já esteja instalado no Windows (com a opção
 "Add Python to PATH" marcada durante a instalação) — os `.bat` avisam
 se o Python não for encontrado.
 
-## Uso — Interface gráfica (recomendado)
+## Uso — Interface gráfica
 
 ```bash
 python app.py
@@ -84,10 +92,18 @@ Abre uma janela com:
   - **Voltar para roupa padrão**: troca pra roupa padrão imediatamente,
     sem mexer em nada que esteja na fila. Útil pra "resetar" o avatar
     manualmente a qualquer momento.
+  - **Ver fila...**: abre uma janela mostrando o presente **ativo agora**
+    (com o tempo restante aproximado) e os que estão **esperando** na
+    fila, com um botão pra atualizar e um pra limpar.
+  - **Limpar fila**: cancela a recompensa ativa e todas as pendentes
+    (sem reverter pra roupa padrão automaticamente — pra isso, use o
+    PÂNICO) e **avisa quantos foram removidos**.
   - **🚨 PÂNICO**: pede confirmação e, se você confirmar, cancela **tudo**
-    que estiver ativo ou esperando na fila de presentes com duração (sem
-    deixar nenhum deles rodar o próprio revert) e troca pra roupa padrão
-    na hora. Serve como um botão de emergência caso algo saia do
+    que estiver ativo ou esperando na fila de recompensas com duração
+    (inclusive os que rodam em paralelo com "ignorar a fila" — veja
+    abaixo), troca pra roupa padrão na hora, e **avisa quantas
+    recompensas foram canceladas** (quantas da fila + quantas em
+    paralelo). Serve como um botão de emergência caso algo saia do
     controle durante uma LIVE.
   - **Parâmetros do avatar...**, **Descobrir valores ao vivo...** (veja
     a seção própria abaixo) e **Salvar configuração** (essa última
@@ -97,36 +113,46 @@ Abre uma janela com:
     LIVE quando salvar, a conexão atual continua usando a configuração
     antiga até desconectar e conectar de novo — os botões de teste já
     usam a versão nova na hora, sem precisar reconectar).
-- **Aba "Presentes"**: a lista mostra **um presente por linha** (não
-  importa quantos itens/parâmetros ele mexa — a coluna "Itens" resume
-  todos, tipo `(5) OUTFIT=2, TOP=1, ...`). Duplo-clique numa linha abre
-  pra edição.
-  - **Novo presente** / **Editar presente** / **Remover presente**.
-  - **Testar (Aplicar)**: aplica **todos os itens** do presente
-    selecionado agora, só para conferir — não entra na fila, não conta
+- **Aba "Recompensas"**: a lista mostra **uma recompensa por linha**
+  (não importa quantos presentes disparam ela nem quantos
+  itens/parâmetros ela mexa — a coluna "Presentes" mostra quais
+  presentes reais do TikTok disparam essa recompensa, e a coluna
+  "Itens" resume os alvos, tipo `(5) OUTFIT=2, TOP=1, ...`), com
+  colunas extras mostrando se está **ativa**, o **conjunto** usado e se
+  ela **ignora a fila** (veja as seções acima). Duplo-clique numa linha
+  abre pra edição.
+  - **Nova recompensa** / **Editar recompensa** / **Remover recompensa**.
+  - **Ativar/Desativar**: liga/desliga a recompensa selecionada com um
+    clique, sem precisar apagar nada nem abrir o formulário.
+  - **Testar (Aplicar)**: aplica **todos os itens** da recompensa
+    selecionada agora, só para conferir — não entra na fila, não conta
     duração e não reverte pra roupa padrão depois. Serve só pra
-    verificar que todos os itens do presente aplicam certo, sem
-    interferir na fila nem no estado normal do sistema.
-  - **Testar (Completo)**: roda o presente **inteiro**, exatamente
+    verificar que todos os itens aplicam certo, sem interferir na fila
+    nem no estado normal do sistema.
+  - **Testar (Completo)**: roda a recompensa **inteira**, exatamente
     como aconteceria numa LIVE de verdade — aplica os alvos, entra na
-    fila se tiver duração, espera, e reverte automaticamente ao final.
+    fila se tiver duração (ou roda em paralelo, se tiver
+    `ignore_queue`), espera, e reverte automaticamente ao final.
     Funciona **com ou sem estar conectado ao TikTok**.
-  - No formulário de **criar/editar** um presente é onde você vê cada
-    item individualmente (a lista de alvos), com um botão **"Testar"**
-    próprio em cada um, pra validar peça por peça antes mesmo de salvar.
+  - No formulário de **criar/editar** uma recompensa é onde você
+    escolhe o(s) presente(s) do TikTok que a disparam (com "Adicionar",
+    "Escolher da lista..." e "Remover selecionado" — pode ser mais de
+    um presente pra mesma recompensa) e vê cada item individualmente
+    (a lista de alvos), com um botão **"Testar"** próprio em cada um,
+    pra validar peça por peça antes mesmo de salvar.
 - **Aba "Conjuntos de roupa"**: a lista de conjuntos (`outfits:`), com
   uma coluna **"Padrão?"** marcando com ★ qual é a roupa padrão atual.
   - **Novo conjunto** / **Editar conjunto** / **Remover conjunto**
-    (remover avisa se o conjunto é a roupa padrão ou é usado por algum
-    presente, mas não impede).
+    (remover avisa se o conjunto é a roupa padrão ou é usado por alguma
+    recompensa, mas não impede).
   - **Testar conjunto (completo)**: aplica todas as peças do conjunto
     selecionado agora, em sequência.
   - **★ Definir como roupa padrão**: torna o conjunto selecionado a
     roupa padrão global na hora — sem precisar editar o YAML nem abrir
     outra janela.
   - Renomear um conjunto (editando o nome no formulário) atualiza
-    sozinho qualquer presente ou a roupa padrão global que já apontava
-    pro nome antigo.
+    sozinho qualquer recompensa ou a roupa padrão global que já
+    apontava pro nome antigo.
 - **Log**: mesma informação que apareceria no console (`[TIKTOK]`,
   `[OSC]`, `[ERROR]`), sempre visível embaixo das abas.
 
@@ -134,39 +160,58 @@ Fluxo recomendado: primeiro monte seus **conjuntos de roupa** (aba
 "Conjuntos de roupa" → "Novo conjunto" → adicione as peças com
 "Parâmetros do avatar..." pra não adivinhar nomes → teste cada peça →
 defina um deles como padrão com "★ Definir como roupa padrão"). Depois
-vá pra aba **"Presentes"** → "Novo presente" → escolha um conjunto
-pronto e/ou alvos extras → salve → selecione o presente e clique em
-**Testar (Completo)** pra conferir o ciclo inteiro (inclusive
+vá pra aba **"Recompensas"** → "Nova recompensa" → dê um nome livre →
+adicione o(s) presente(s) do TikTok que a disparam → escolha um
+conjunto pronto e/ou alvos extras → salve → selecione a recompensa e
+clique em **Testar (Completo)** pra conferir o ciclo inteiro (inclusive
 duração/revert) — tudo isso sem precisar estar numa LIVE. Só depois de
 conferir que está tudo certo, clique em
 **Salvar configuração**.
-
-## Uso — Linha de comando (opcional, para quem preferir)
-
-O `main.py` original continua funcionando exatamente igual, sem janela,
-para quem quiser rodar em modo terminal/serviço:
-
-```bash
-python main.py
-```
-
-Saída esperada:
-
-```
-[12:00:01] [TIKTOK] Conectando à LIVE de @vortexjogosuwu...
-[12:00:02] [TIKTOK] Conectado à LIVE de @vortexjogosuwu
-[12:00:15] [TIKTOK] VortexFan enviou Rose x1
-[12:00:15] [TIKTOK] Aplicando regra do presente 'Rose' (recebido de VortexFan, quantidade 1)
-[12:00:15] [OSC] /avatar/parameters/Outfit = 1
-```
 
 ## Configuração
 
 O `config.yaml` já vem **enxuto**, só com o essencial pra você montar do
 zero: seu canal, host/porta do VRChat, e um conjunto `Padrao` (que você
-edita com os parâmetros reais do seu avatar). Não tem nenhum presente de
-exemplo — adicione os seus pela GUI (botão "Novo presente") ou editando
-o arquivo direto. Os trechos abaixo são só pra ilustrar o formato.
+edita com os parâmetros reais do seu avatar). Não tem nenhuma recompensa
+de exemplo — adicione as suas pela GUI (botão "Nova recompensa") ou
+editando o arquivo direto. Os trechos abaixo são só pra ilustrar o formato.
+
+### Recompensa × Presente — dois conceitos diferentes
+
+- **Presente** é o nome real que o TikTok usa (`Rose`, `TikTok`, `GG`,
+  `Galaxy`...) — o que alguém manda de verdade na LIVE.
+- **Recompensa** é a configuração (o conjunto de roupa, a duração, o
+  revert etc.) — o que ela faz.
+
+Como alguns presentes têm "o mesmo valor" pra você, **uma recompensa
+pode ser disparada por mais de um presente**:
+
+```yaml
+gifts:
+  Casual:                          # nome da recompensa (livre, não precisa ser nome de presente)
+    gift_names: ["Rose", "TikTok", "GG"]   # qualquer um desses 3 dispara essa recompensa
+    outfit: "Casual"
+```
+
+Cada presente real só pode disparar **uma** recompensa — se você tentar
+colocar o mesmo presente em duas recompensas diferentes, o programa
+recusa carregar e avisa exatamente o conflito.
+
+> Se você não usar `gift_names`, a própria chave da recompensa é tratada
+> como o nome do presente (é assim que configs mais simples/antigas
+> continuam funcionando sem precisar editar nada):
+> ```yaml
+> gifts:
+>   Rose:              # aqui "Rose" é ao mesmo tempo o nome da recompensa E o presente
+>     parameter: "Outfit"
+>     type: int
+>     value: 1
+> ```
+
+Na GUI, isso é a aba **"Recompensas"**: o formulário de "Nova
+recompensa" tem o nome livre da recompensa + uma lista separada de
+"Presentes do TikTok que disparam esta recompensa" (com "Adicionar",
+"Escolher da lista..." e "Remover selecionado").
 
 Edite `config.yaml` (ou use a GUI, que edita esse arquivo pra você):
 
@@ -220,7 +265,7 @@ gifts:
   endereço OSC** (não só parâmetros de avatar), use `address:` no lugar
   de `parameter:` com o caminho completo, ex:
   `address: "/avatar/parameters/MeuParametro"`.
-- Um presente pode disparar **mais de um alvo** de uma vez usando a
+- Uma recompensa pode disparar **mais de um alvo** de uma vez usando a
   forma `parameters:` (lista) em vez de `parameter:`/`type:`/`value:` —
   veja o exemplo `TikTok:` no `config.yaml` (troca a roupa **e** liga um
   efeito ao mesmo tempo).
@@ -334,9 +379,9 @@ pré-criado OU uma lista manual de alvos):
      #     type: int
      #     value: 0
    ```
-2. **Revert próprio do presente**, com `revert_outfit:` (nome de um
+2. **Revert próprio da recompensa**, com `revert_outfit:` (nome de um
    conjunto) e/ou `revert:` (lista manual, mesmo formato de
-   `parameters:`) — útil se, por exemplo, um presente também ligou um
+   `parameters:`) — útil se, por exemplo, uma recompensa também ligou um
    efeito Bool que precisa ser desligado ao reverter (veja o exemplo
    `Diamond:` no `config.yaml`):
    ```yaml
@@ -355,16 +400,85 @@ pré-criado OU uma lista manual de alvos):
            value: false
    ```
 
-Se um presente tiver duração e **nenhum dos dois** (nem revert próprio
+Se uma recompensa tiver duração e **nenhum dos dois** (nem revert próprio
 nem o padrão global), o programa recusa carregar o `config.yaml` e
-explica exatamente o que falta — assim nunca fica um presente "preso"
+explica exatamente o que falta — assim nunca fica uma recompensa "presa"
 sem saber para onde voltar.
 
-Na GUI, tudo isso é configurável com o mouse: o formulário de presente
+Na GUI, tudo isso é configurável com o mouse: o formulário de recompensa
 tem um menu suspenso pra escolher o conjunto a vestir, uma caixinha
-"Este presente fica ativo por um tempo..." + campo de minutos + um menu
-suspenso pra escolher o conjunto de revert, e o botão **"Roupa padrão
-(revert global)"** na janela principal edita o padrão global.
+"Esta recompensa fica ativa por um tempo..." + campo de duração com
+escolha de unidade (**minutos** ou **segundos** — útil pra durações
+curtas tipo 2 ou 5 segundos, sem precisar calcular frações de minuto)
++ um menu suspenso pra escolher o conjunto de revert. O padrão global
+é definido na aba "Conjuntos de roupa" (botão "★ Definir como roupa
+padrão").
+
+### Ignorar a fila (`ignore_queue`) — pra ações que não devem esperar
+
+Por padrão, toda recompensa **com duração** entra na fila exclusiva
+acima — só um fica ativo por vez. Isso é o certo pra troca de roupa
+(não faz sentido vestir duas coisas ao mesmo tempo), mas nem toda
+recompensa com duração é uma troca de roupa: por exemplo, um "boop" no
+nariz do avatar (liga um parâmetro, espera um instante, desliga) não
+deveria ficar esperando 10 minutos atrás de uma troca de roupa em
+andamento — ele deveria acontecer na hora, em paralelo.
+
+Pra isso, marque `ignore_queue: true` na recompensa:
+
+```yaml
+gifts:
+  Rose:
+    parameter: "NOSE_BOOP"
+    type: bool
+    value: true
+    duration_seconds: 2
+    ignore_queue: true
+    revert:
+      - parameter: "NOSE_BOOP"
+        type: bool
+        value: false
+```
+
+Essa recompensa aplica, espera 2 segundos e reverte **sozinha**, sem
+entrar na fila de troca de roupa nem esperar (ou bloquear) nenhuma
+outra recompensa com duração. Na GUI, é a caixinha "Ignorar a fila"
+dentro da seção de duração do formulário de recompensa.
+
+Pra acompanhar o que está acontecendo na fila (a de troca de roupa,
+não os `ignore_queue`), use os botões sempre visíveis:
+
+- **"Ver fila..."**: mostra a recompensa ativa agora (com tempo restante
+  aproximado) e a lista de quem está esperando.
+- **"Limpar fila"**: cancela tudo (ativo + pendentes) sem reverter
+  automaticamente, e avisa quantos foram removidos (ex: "2 recompensa(s)
+  removida(s) da fila."). Se quiser que reverta pra roupa padrão
+  também, use o **PÂNICO** em vez disso — ele limpa a fila (inclusive
+  os `ignore_queue` que estiverem rodando), volta pra roupa padrão, e
+  avisa quantas recompensas foram canceladas no total.
+
+### Ativar/desativar uma recompensa sem apagar
+
+Se você quer "desligar" uma recompensa temporariamente (por exemplo,
+durante uma promoção diferente, ou pra testar algo sem que ela
+dispare), não precisa apagar a configuração toda — marque
+`enabled: false`:
+
+```yaml
+gifts:
+  Rose:
+    parameter: "Outfit"
+    type: int
+    value: 5
+    enabled: false   # a recompensa continua configurada, mas é ignorada
+```
+
+Uma recompensa desativada aparece na lista principal acinzentada, com
+"Não" na coluna "Ativo?". Se alguém mandar um presente que dispara essa
+recompensa enquanto ela estiver desativada, o programa só loga que
+ignorou, sem fazer nada. Na GUI, use o botão **"Ativar/Desativar"** na
+aba "Recompensas" (com a recompensa selecionada) pra alternar isso com
+um clique, sem precisar abrir o formulário de edição.
 
 ### Lista de nomes de presente (sem precisar adivinhar)
 
@@ -488,8 +602,8 @@ errado, o log aponta a causa:
 
 ## Uso
 
-Com a LIVE já no ar e o VRChat aberto com OSC habilitado (pela GUI, clique
-em "Conectar na LIVE"; pela linha de comando, rode `python main.py`).
+Com a LIVE já no ar e o VRChat aberto com OSC habilitado, clique em
+"Conectar na LIVE" na GUI.
 
 Se algum presente estiver configurado com `type: string` apontando para um
 parâmetro de avatar, você verá um aviso assim ao iniciar o programa:
@@ -512,18 +626,20 @@ em vez de encerrar.
 
 ```
 tiktok-vrchat/
-├── app.py                  # Ponto de entrada da GUI (recomendado)
-├── main.py                 # Ponto de entrada em linha de comando
+├── app.py                  # Ponto de entrada da GUI
 ├── iniciar_app.bat          # Atalho Windows: cria .venv + roda app.py
-├── iniciar_main.bat         # Atalho Windows: cria .venv + roda main.py
-├── config.yaml              # Presentes -> parâmetros OSC + config do VRChat
+├── build_exe.bat            # Gera o TikTokVRChatBridge.exe standalone
+├── tiktok_vrchat.spec        # Configuração do PyInstaller (usada pelo build_exe.bat)
+├── BUILD.md                  # Como gerar o .exe manualmente (sem precisar de Python pra usar)
+├── config.yaml              # Recompensas -> parâmetros OSC + config do VRChat
 ├── requirements.txt
+├── requirements-dev.txt      # Só pra gerar o .exe (PyInstaller) -- não precisa pra usar
 ├── utils_log.py             # Logging padronizado [TIKTOK]/[OSC]/[ERROR]
 ├── config/
 │   └── loader.py              # Carrega, valida e salva config.yaml
 ├── gui/
 │   ├── app.py                 # Janela principal (Tkinter)
-│   └── dialogs.py              # Diálogos de criar/editar presente + botão "Testar"
+│   └── dialogs.py              # Diálogos de criar/editar recompensa + botão "Testar"
 ├── tiktok/
 │   ├── listener.py            # Conexão TikTok LIVE + reconexão + streaks
 │   └── catalog.py              # Lista de nomes de presente (LIVE + sugestões)
@@ -532,8 +648,8 @@ tiktok-vrchat/
 │   ├── osc_listener.py           # "Modo escuta": recebe o que o VRChat manda pra fora
 │   └── discovery.py              # Lê os parâmetros do avatar gravados pelo VRChat
 ├── handlers/
-│   ├── gifts.py               # Presente -> ação OSC (via config.yaml)
-│   └── timed_queue.py          # Fila exclusiva de presentes com duração
+│   ├── gifts.py               # Presente -> recompensa -> ação OSC (via config.yaml)
+│   └── timed_queue.py          # Fila exclusiva de recompensas com duração
 ```
 
 Isso adiciona pastas `config/` e `gui/` além da estrutura original pedida,

@@ -588,6 +588,79 @@ class GiftNameCatalogDialog(tk.Toplevel):
         self.destroy()
 
 
+class GiftNameListEditor(ttk.LabelFrame):
+    """
+    Lista de nomes REAIS de presentes do TikTok que disparam uma
+    recompensa. Permite mais de um (ex: "Rose" e "TikTok" caindo na
+    mesma recompensa) -- digitando manualmente ou escolhendo da lista
+    de presentes do canal (GiftNameCatalogDialog).
+    """
+
+    def __init__(self, parent, username, initial=None):
+        super().__init__(
+            parent, text="Presentes do TikTok que disparam esta recompensa", padding=6
+        )
+        self.username = username
+        self.names: list[str] = list(initial or [])
+
+        entry_row = ttk.Frame(self)
+        entry_row.pack(fill="x")
+        self.name_var = tk.StringVar()
+        entry = ttk.Entry(entry_row, textvariable=self.name_var, width=22)
+        entry.pack(side="left")
+        entry.bind("<Return>", lambda _e: self._add_typed())
+        ttk.Button(entry_row, text="Adicionar", command=self._add_typed).pack(
+            side="left", padx=(4, 2)
+        )
+        ttk.Button(
+            entry_row, text="Escolher da lista...", command=self._open_catalog
+        ).pack(side="left", padx=2)
+
+        self.listbox = tk.Listbox(self, height=4, exportselection=False)
+        self.listbox.pack(fill="x", pady=(6, 0))
+
+        ttk.Button(self, text="Remover selecionado", command=self._remove_selected).pack(
+            anchor="w", pady=(4, 0)
+        )
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.listbox.delete(0, "end")
+        for name in self.names:
+            self.listbox.insert("end", name)
+
+    def _add_typed(self) -> None:
+        name = self.name_var.get().strip()
+        if not name:
+            return
+        self._add_name(name)
+        self.name_var.set("")
+
+    def _add_name(self, name: str) -> None:
+        name = name.strip()
+        if not name or name in self.names:
+            return
+        self.names.append(name)
+        self._refresh()
+
+    def _open_catalog(self) -> None:
+        GiftNameCatalogDialog(self, username=self.username, on_choose=self._add_name)
+
+    def _remove_selected(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo(
+                "Nada selecionado", "Selecione um presente na lista pra remover.", parent=self
+            )
+            return
+        del self.names[sel[0]]
+        self._refresh()
+
+    def get_names(self) -> list[str]:
+        return list(self.names)
+
+
 class GiftEditDialog(tk.Toplevel):
     """
     Janela para criar/editar um presente completo: nome, conjunto de
@@ -601,17 +674,21 @@ class GiftEditDialog(tk.Toplevel):
         on_test_target,
         outfits_raw,
         gift_name="",
+        trigger_gift_names=None,
         outfit_name=None,
         extra_targets=None,
-        duration_minutes=None,
+        duration_value=None,
+        duration_unit="minutos",
         revert_outfit_name=None,
         revert_extra_targets=None,
+        enabled=True,
+        ignore_queue=False,
         existing_names=None,
         editing_original_name=None,
         username="",
     ):
         super().__init__(parent)
-        self.title("Presente" if not gift_name else f"Editar presente: {gift_name}")
+        self.title("Nova recompensa" if not gift_name else f"Editar recompensa: {gift_name}")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -630,55 +707,70 @@ class GiftEditDialog(tk.Toplevel):
         frm = ttk.Frame(self)
         frm.pack(fill="both", expand=True, padx=10, pady=10)
 
-        ttk.Label(frm, text="Nome do presente (exatamente como o TikTok chama, ex: Rose):").grid(
+        ttk.Label(frm, text="Nome da recompensa (livre, ex: \"Casual\", \"Combo Barato\"):").grid(
             row=0, column=0, sticky="w", **pad
         )
-        name_row = ttk.Frame(frm)
-        name_row.grid(row=1, column=0, sticky="we", padx=10)
         self.name_var = tk.StringVar(value=gift_name)
-        ttk.Entry(name_row, textvariable=self.name_var, width=34).pack(side="left")
-        ttk.Button(
-            name_row, text="Escolher da lista...", command=self._open_gift_catalog
-        ).pack(side="left", padx=(6, 0))
+        ttk.Entry(frm, textvariable=self.name_var, width=44).grid(
+            row=1, column=0, sticky="we", padx=10
+        )
+
+        self.gift_names_editor = GiftNameListEditor(
+            frm, username=self.username, initial=trigger_gift_names,
+        )
+        self.gift_names_editor.grid(row=2, column=0, sticky="we", padx=10, pady=(8, 0))
+
+        self.enabled_var = tk.BooleanVar(value=enabled)
+        ttk.Checkbutton(
+            frm,
+            text="Recompensa ativa (desmarque pra desligar temporariamente, sem apagar a configuração)",
+            variable=self.enabled_var,
+        ).grid(row=3, column=0, sticky="w", padx=10, pady=(8, 0))
 
         ttk.Label(frm, text="Conjunto de roupa a vestir (opcional):").grid(
-            row=2, column=0, sticky="w", **pad
+            row=4, column=0, sticky="w", **pad
         )
         self.outfit_var = tk.StringVar(value=outfit_name or NO_OUTFIT)
         ttk.Combobox(
             frm, textvariable=self.outfit_var, values=self.outfit_options,
             state="readonly", width=30,
-        ).grid(row=3, column=0, sticky="w", padx=10)
+        ).grid(row=5, column=0, sticky="w", padx=10)
 
         self.targets_editor = TargetListEditor(
             frm, "Alvos extras (além do conjunto acima, opcional)",
             on_test_target=self.on_test_target, initial=extra_targets, height=4,
         )
-        self.targets_editor.grid(row=4, column=0, sticky="we", padx=10, pady=(10, 0))
+        self.targets_editor.grid(row=6, column=0, sticky="we", padx=10, pady=(10, 0))
 
         # --- Duracao / fila exclusiva -----------------------------------
         duration_frame = ttk.LabelFrame(frm, text="Duração (opcional — fila exclusiva)", padding=6)
-        duration_frame.grid(row=5, column=0, sticky="we", padx=10, pady=(10, 0))
+        duration_frame.grid(row=7, column=0, sticky="we", padx=10, pady=(10, 0))
 
-        self.has_duration_var = tk.BooleanVar(value=duration_minutes is not None)
+        self.has_duration_var = tk.BooleanVar(value=duration_value is not None)
         ttk.Checkbutton(
             duration_frame,
-            text="Este presente fica ativo por um tempo e depois volta ao padrão "
-                 "(se marcado, entra numa fila: não sobrepõe outro presente com "
-                 "duração que já esteja ativo)",
+            text="Esta recompensa fica ativa por um tempo e depois volta ao padrão "
+                 "(se marcado, entra numa fila: não sobrepõe outra recompensa com "
+                 "duração que já esteja ativa)",
             variable=self.has_duration_var,
             command=self._update_duration_state,
         ).grid(row=0, column=0, columnspan=3, sticky="w")
 
-        ttk.Label(duration_frame, text="Duração (minutos):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(duration_frame, text="Duração:").grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.duration_var = tk.StringVar(
-            value=str(duration_minutes) if duration_minutes is not None else "10"
+            value=str(duration_value) if duration_value is not None else "10"
         )
         self.duration_entry = ttk.Entry(duration_frame, textvariable=self.duration_var, width=10)
         self.duration_entry.grid(row=1, column=1, sticky="w", padx=(4, 0), pady=(6, 0))
+        self.duration_unit_var = tk.StringVar(value=duration_unit)
+        self.duration_unit_combo = ttk.Combobox(
+            duration_frame, textvariable=self.duration_unit_var,
+            values=["minutos", "segundos"], state="readonly", width=9,
+        )
+        self.duration_unit_combo.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
         ttk.Label(
-            duration_frame, text="(ex: 1, 10, 25, 30 ...)", foreground="#666666"
-        ).grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
+            duration_frame, text="(ex: 1 minuto, 30 segundos ...)", foreground="#666666"
+        ).grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
 
         ttk.Label(duration_frame, text="Reverter para o conjunto (opcional):").grid(
             row=2, column=0, columnspan=3, sticky="w", pady=(8, 0)
@@ -697,10 +789,20 @@ class GiftEditDialog(tk.Toplevel):
         )
         self.revert_editor.grid(row=4, column=0, columnspan=3, sticky="we", pady=(8, 0))
 
+        self.ignore_queue_var = tk.BooleanVar(value=ignore_queue)
+        self.ignore_queue_check = ttk.Checkbutton(
+            duration_frame,
+            text="Ignorar a fila (roda em paralelo — não espera nem bloqueia "
+                 "outros presentes com duração; bom pra ações rápidas tipo um "
+                 "\"boop\" que não devem esperar uma troca de roupa)",
+            variable=self.ignore_queue_var,
+        )
+        self.ignore_queue_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
         self._update_duration_state()
 
         final_btns = ttk.Frame(frm)
-        final_btns.grid(row=6, column=0, pady=(14, 0))
+        final_btns.grid(row=8, column=0, pady=(14, 0))
         ttk.Button(final_btns, text="Salvar presente", command=self._on_ok).pack(
             side="left", padx=4
         )
@@ -708,20 +810,29 @@ class GiftEditDialog(tk.Toplevel):
             side="left", padx=4
         )
 
-    def _open_gift_catalog(self) -> None:
-        GiftNameCatalogDialog(
-            self, username=self.username, on_choose=lambda name: self.name_var.set(name)
-        )
-
     def _update_duration_state(self):
         state = "readonly" if self.has_duration_var.get() else "disabled"
         self.duration_entry.configure(state="normal" if self.has_duration_var.get() else "disabled")
+        self.duration_unit_combo.configure(state=state)
         self.revert_outfit_combo.configure(state=state)
+        self.ignore_queue_check.configure(
+            state="normal" if self.has_duration_var.get() else "disabled"
+        )
 
     def _on_ok(self):
         name = self.name_var.get().strip()
         if not name:
-            messagebox.showerror("Nome obrigatório", "Informe o nome do presente.", parent=self)
+            messagebox.showerror("Nome obrigatório", "Informe o nome da recompensa.", parent=self)
+            return
+
+        gift_names = self.gift_names_editor.get_names()
+        if not gift_names:
+            messagebox.showerror(
+                "Nenhum presente",
+                "Adicione ao menos um presente do TikTok que deve disparar "
+                "esta recompensa.",
+                parent=self,
+            )
             return
 
         outfit_name = self.outfit_var.get()
@@ -743,23 +854,24 @@ class GiftEditDialog(tk.Toplevel):
         if name in other_names:
             messagebox.showerror(
                 "Nome duplicado",
-                f"Já existe um presente chamado '{name}'. Escolha outro nome.",
+                f"Já existe uma recompensa chamada '{name}'. Escolha outro nome.",
                 parent=self,
             )
             return
 
-        duration_minutes = None
+        duration_value = None
+        duration_unit = self.duration_unit_var.get()
         revert_outfit_name = None
         revert_extra_targets = []
         if self.has_duration_var.get():
             try:
-                duration_minutes = float(self.duration_var.get().strip().replace(",", "."))
+                duration_value = float(self.duration_var.get().strip().replace(",", "."))
             except ValueError:
                 messagebox.showerror(
-                    "Duração inválida", "Informe um número de minutos válido.", parent=self
+                    "Duração inválida", "Informe um número válido.", parent=self
                 )
                 return
-            if duration_minutes <= 0:
+            if duration_value <= 0:
                 messagebox.showerror(
                     "Duração inválida", "A duração precisa ser maior que zero.", parent=self
                 )
@@ -768,15 +880,24 @@ class GiftEditDialog(tk.Toplevel):
             revert_outfit_name = None if revert_outfit_value == NO_OUTFIT else revert_outfit_value
             revert_extra_targets = self.revert_editor.get_targets()
 
-        raw = {}
+        ignore_queue = self.ignore_queue_var.get() if self.has_duration_var.get() else False
+
+        raw = {"gift_names": gift_names}
         if outfit_name:
             raw["outfit"] = outfit_name
         if len(extra_targets) > 1:
             raw["parameters"] = extra_targets
         elif len(extra_targets) == 1:
             raw.update(extra_targets[0])
-        if duration_minutes is not None:
-            raw["duration_minutes"] = duration_minutes
+        if not self.enabled_var.get():
+            raw["enabled"] = False
+        if duration_value is not None:
+            if duration_unit == "segundos":
+                raw["duration_seconds"] = duration_value
+            else:
+                raw["duration_minutes"] = duration_value
+            if ignore_queue:
+                raw["ignore_queue"] = True
         if revert_outfit_name:
             raw["revert_outfit"] = revert_outfit_name
         if revert_extra_targets:
@@ -794,11 +915,15 @@ class GiftEditDialog(tk.Toplevel):
 
         self.result = {
             "name": name,
+            "gift_names": gift_names,
             "outfit": outfit_name,
             "extra_targets": extra_targets,
-            "duration_minutes": duration_minutes,
+            "duration_value": duration_value,
+            "duration_unit": duration_unit,
             "revert_outfit": revert_outfit_name,
             "revert_extra_targets": revert_extra_targets,
+            "enabled": self.enabled_var.get(),
+            "ignore_queue": ignore_queue,
         }
         self.destroy()
 
@@ -1302,3 +1427,90 @@ class LiveParametersDialog(tk.Toplevel):
             osc_type = "string"
         if self.on_use_parameter is not None:
             self.on_use_parameter(name, osc_type, value, address)
+
+
+class QueueStatusDialog(tk.Toplevel):
+    """
+    Mostra o que está acontecendo na fila de presentes com duração
+    agora: o item ativo (com tempo restante aproximado) e os que estão
+    esperando. Tem um botão pra atualizar (a fila muda com o tempo) e
+    um pra limpar tudo.
+    """
+
+    def __init__(self, parent, get_status, on_clear):
+        super().__init__(parent)
+        self.title("Fila de presentes")
+        self.geometry("480x380")
+        self.transient(parent)
+
+        self.get_status = get_status
+        self.on_clear = on_clear
+
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill="both", expand=True)
+
+        self.active_label = ttk.Label(frm, text="", justify="left")
+        self.active_label.pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(frm, text="Esperando na fila:").pack(anchor="w")
+        columns = ("posicao", "presente", "usuario", "duracao")
+        self.tree = ttk.Treeview(frm, columns=columns, show="headings", height=8)
+        self.tree.heading("posicao", text="#")
+        self.tree.heading("presente", text="Recompensa")
+        self.tree.heading("usuario", text="De")
+        self.tree.heading("duracao", text="Duração")
+        self.tree.column("posicao", width=30, anchor="center")
+        self.tree.column("presente", width=150)
+        self.tree.column("usuario", width=140)
+        self.tree.column("duracao", width=80, anchor="center")
+        self.tree.pack(fill="both", expand=True, pady=(4, 0))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Atualizar", command=self._refresh).pack(side="left", padx=2)
+        ttk.Button(btns, text="Limpar fila", command=self._on_clear_clicked).pack(
+            side="left", padx=(12, 2)
+        )
+        ttk.Button(btns, text="Fechar", command=self.destroy).pack(side="right", padx=2)
+
+        self._refresh()
+
+    def _refresh(self):
+        current, pending = self.get_status()
+
+        if current is None:
+            self.active_label.configure(
+                text="Nenhuma recompensa ativa agora.", foreground="#888888"
+            )
+        else:
+            remaining = (
+                f"{current.remaining_seconds:.0f}s restante(s)"
+                if current.remaining_seconds is not None else "?"
+            )
+            self.active_label.configure(
+                text=f"Ativo agora: '{current.gift_name}' (de {current.user_name}) "
+                f"— {remaining}",
+                foreground="#1a8a1a",
+            )
+
+        self.tree.delete(*self.tree.get_children())
+        for idx, item in enumerate(pending, start=1):
+            minutes = item.duration_seconds / 60
+            duration_label = (
+                f"{int(minutes)} min" if minutes == int(minutes) and minutes >= 1
+                else f"{item.duration_seconds:.0f}s"
+            )
+            self.tree.insert(
+                "", "end", values=(idx, item.gift_name, item.user_name, duration_label)
+            )
+
+    def _on_clear_clicked(self):
+        if not messagebox.askyesno(
+            "Limpar fila?",
+            "Isso cancela a recompensa ativa e todas as que estão esperando na "
+            "fila (sem reverter pra roupa padrão automaticamente).\n\nContinuar?",
+            parent=self,
+        ):
+            return
+        self.on_clear()
+        self._refresh()

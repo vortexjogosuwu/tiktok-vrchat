@@ -2,8 +2,8 @@
 REM =============================================================
 REM iniciar_app.bat
 REM Inicia a interface grafica (app.py) usando um ambiente virtual
-REM Python local (pasta "venv"), criando e instalando dependencias
-REM automaticamente na primeira vez que for executado.
+REM Python local (pasta ".venv"), criando e instalando dependencias
+REM automaticamente sempre que necessario.
 REM =============================================================
 
 setlocal
@@ -31,15 +31,19 @@ if not exist "%PYTHON_EXE%" (
         pause
         exit /b 1
     )
+)
 
-    echo [SETUP] Instalando dependencias do requirements.txt...
-    "%PYTHON_EXE%" -m pip install --upgrade pip
+REM --- Garante as dependencias em TODA execucao (pip pula o que ja
+REM     esta instalado, entao isso e rapido e corrige um .venv que
+REM     ficou incompleto por qualquer motivo, sem precisar apagar nada) ---
+echo [SETUP] Verificando dependencias...
+"%PYTHON_EXE%" -m pip install --upgrade pip --quiet --disable-pip-version-check
+"%PYTHON_EXE%" -m pip install -r requirements.txt --quiet --disable-pip-version-check
+if errorlevel 1 (
+    echo [ERRO] Falha ao instalar as dependencias. Tentando novamente com mais detalhes:
     "%PYTHON_EXE%" -m pip install -r requirements.txt
-    if errorlevel 1 (
-        echo [ERRO] Falha ao instalar as dependencias.
-        pause
-        exit /b 1
-    )
+    pause
+    exit /b 1
 )
 
 echo [INFO] Iniciando a interface grafica...

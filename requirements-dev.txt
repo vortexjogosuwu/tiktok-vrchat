@@ -1,0 +1,4 @@
+# Dependências extras SÓ pra gerar o .exe (build_exe.bat).
+# Quem só vai USAR o programa não precisa disso -- só quem vai gerar
+# um novo .exe a partir do código-fonte.
+pyinstaller>=6.0
